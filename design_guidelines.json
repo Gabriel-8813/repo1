@@ -1,0 +1,188 @@
+{
+  "project_name": "MediTrans Ontario",
+  "identity": {
+    "persona": "E1 - The Anti-AI Designer",
+    "mission": "Create a clinical, trustworthy, and logistics-focused medical transport platform.",
+    "vibe": "Swiss Clinical x High-Speed Logistics. Sterile but fast.",
+    "archetype": "Archetype 4: Swiss & High-Contrast (Authority, Clarity) mixed with Archetype 2: The Performance Pro (Logistics)."
+  },
+  "design_system": {
+    "typography": {
+      "headings": {
+        "family": "Archivo",
+        "weights": ["600", "700", "900"],
+        "usage": "Headings, Data Values, KPIs. Tight tracking (-0.02em).",
+        "import": "@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&display=swap');"
+      },
+      "body": {
+        "family": "Public Sans",
+        "weights": ["400", "500"],
+        "usage": "Body text, UI labels, Forms.",
+        "import": "@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600&display=swap');"
+      }
+    },
+    "colors": {
+      "palette": {
+        "primary": {
+          "name": "Deep Navy (Authority)",
+          "hex": "#0F172A",
+          "tailwind": "bg-slate-900"
+        },
+        "secondary": {
+          "name": "Clinical White",
+          "hex": "#F8FAFC",
+          "tailwind": "bg-slate-50"
+        },
+        "accent": {
+          "name": "Signal Blue (Action)",
+          "hex": "#2563EB",
+          "tailwind": "bg-blue-600"
+        },
+        "success": {
+          "name": "Permit Green",
+          "hex": "#10B981",
+          "tailwind": "bg-emerald-500"
+        },
+        "destructive": {
+          "name": "Emergency Red",
+          "hex": "#EF4444",
+          "tailwind": "bg-red-500"
+        },
+        "warning": {
+          "name": "Hazard Orange",
+          "hex": "#F59E0B",
+          "tailwind": "bg-amber-500"
+        }
+      },
+      "theme_strategy": "Light Mode Default (Clinical Trust). Dark Mode for 'Night Drive' Dashboard only.",
+      "gradients": "NO generic gradients. Use subtle 'mesh' gradients only for Hero backgrounds (e.g., Slate 900 to Slate 800)."
+    },
+    "spacing": {
+      "scale": "Generous. Use p-8, p-12 for sections. p-6 for cards.",
+      "grid_gap": "gap-6 or gap-8 for layouts. gap-4 for dense data grids."
+    },
+    "radius": {
+      "default": "rounded-md (6px)",
+      "buttons": "rounded-full (Pill shape for primary actions)",
+      "cards": "rounded-lg (8px)"
+    },
+    "shadows": {
+      "card": "shadow-[0_2px_8px_rgba(0,0,0,0.08)]",
+      "hover": "shadow-[0_8px_24px_rgba(0,0,0,0.12)]",
+      "glass": "backdrop-blur-xl bg-white/80 border border-white/20 shadow-sm"
+    }
+  },
+  "assets": {
+    "images": [
+      {
+        "url": "https://images.unsplash.com/photo-1646920912229-bc0d5d94e68b?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "hero_courier",
+        "description": "Medical courier in green jacket with delivery bag. Use for 'Driver Onboarding' section.",
+        "alt": "Medical courier ready for delivery"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1766325693423-69e9fe20605b?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "medical_transport",
+        "description": "Paramedic/Ambulance context. Use for 'Trust & Safety' or 'Medical Standards' section.",
+        "alt": "Professional medical transport vehicle"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1628182087681-b6e7d4a26efd?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "location_context",
+        "description": "Toronto Skyline. Use for 'Ontario-wide Coverage' section background or map overlay.",
+        "alt": "Toronto skyline representing Ontario coverage"
+      },
+      {
+        "url": "https://images.unsplash.com/photo-1632857997897-9418428d7368?crop=entropy&cs=srgb&fm=jpg&q=85",
+        "category": "location_context_alt",
+        "description": "Toronto Cityscape from water. Alternative for location context.",
+        "alt": "Toronto city view"
+      }
+    ],
+    "icons": {
+      "library": "lucide-react",
+      "style": "Stroke width 1.5px (Thin/Clinical).",
+      "specifics": [
+        "Truck (Logistics)",
+        "Stethoscope (Medical)",
+        "ShieldCheck (Compliance)",
+        "MapPin (Tracking)",
+        "FileText (Permits)",
+        "CreditCard (Billing)"
+      ]
+    }
+  },
+  "pages": {
+    "landing": {
+      "layout": "Tetris Grid (Mode A)",
+      "sections": [
+        {
+          "name": "Hero",
+          "style": "Split screen. Left: Value Prop (H1 Archivo Black). Right: Hero Image (Courier) with 'Glass' floating cards showing 'Live Job: Insulin Delivery - 12km'.",
+          "cta": "Start Driving (Primary Blue) / Book Transport (Outline)"
+        },
+        {
+          "name": "Ontario Compliance",
+          "style": "Bento Grid. Cards for 'CVOR Certified', 'TDG Training', 'Vulnerable Sector Check'. Use Check icons heavily.",
+          "bg": "bg-slate-50"
+        },
+        {
+          "name": "Pricing",
+          "style": "3-Column Grid. 'Basic' (Grey), 'Pro' (Blue Border + Glow), 'Premium' (Dark Slate).",
+          "features": ["$49/mo Basic", "$99/mo Pro", "$149/mo Premium"]
+        }
+      ]
+    },
+    "dashboard_driver": {
+      "layout": "High Density Grid (Mode B)",
+      "theme": "Option for Dark Mode (Night Drive)",
+      "widgets": [
+        "Active Job (Map view + ETA)",
+        "Earnings (Bar Chart - Shadcn)",
+        "Compliance Status (Green/Red indicators)",
+        "Job Feed (List of available medical runs)"
+      ]
+    },
+    "onboarding": {
+      "layout": "Centered Card (Width 600px)",
+      "steps": ["Personal Info", "Vehicle Details", "Upload Documents (License, Insurance, TDG)", "Background Check Consent"]
+    }
+  },
+  "components": {
+    "ui_library": "shadcn/ui",
+    "custom_components": [
+      {
+        "name": "PermitCard",
+        "description": "Card showing permit status. Icon left, Title top, Status badge right, Expiry date bottom.",
+        "props": ["status: 'valid' | 'expired' | 'pending'", "expiryDate"]
+      },
+      {
+        "name": "JobRow",
+        "description": "List item for job board. Origin -> Destination arrow visual. Price right aligned. 'Medical Goods' tag.",
+        "style": "Border-b border-slate-100 hover:bg-slate-50 transition-colors"
+      },
+      {
+        "name": "StatMetric",
+        "description": "Big number (Archivo Black), small label (Public Sans). Used for 'Total Earnings', 'Jobs Completed'.",
+        "style": "text-4xl font-black text-slate-900"
+      }
+    ]
+  },
+  "instructions_to_main_agent": [
+    "INSTALL FONTS: Add Archivo and Public Sans to index.html or import in CSS.",
+    "SETUP TAILWIND: Update tailwind.config.js with the 'Deep Navy' and 'Signal Blue' palette.",
+    "USE IMAGES: Use the provided Unsplash URLs. DO NOT use placeholders.",
+    "ONTARIO CONTEXT: Ensure all copy refers to 'Ontario', 'GTA', 'Ministry of Transportation', 'CVOR', 'TDG'.",
+    "MEDICAL VIBE: Keep whitespace high. Avoid clutter. Think 'Sterile Cockpit'.",
+    "TESTIDS: Add data-testid to all buttons and inputs (e.g., 'login-btn', 'permit-upload').",
+    "NO GRADIENTS: Do not use gradient text. Keep it solid and high-contrast.",
+    "TOASTS: Use 'sonner' for notifications (e.g., 'New Job Available')."
+  ],
+  "universal_guidelines": [
+    "Avoid 'AI Slop' (generic centered layouts). Use asymmetry.",
+    "Use 2-3x more padding than standard.",
+    "Micro-animations on all interactive elements.",
+    "Dark colors look good when used independently without gradients.",
+    "Never use AI assistant emojis."
+  ]
+}
