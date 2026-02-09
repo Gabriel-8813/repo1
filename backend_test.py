@@ -102,13 +102,12 @@ class MediTransAPITester:
 
     def test_user_login(self):
         """Test user login with existing credentials"""
-        if not self.token:
+        if not self.token or not hasattr(self, 'test_email'):
             return False
             
-        # Try to login with the registered user
-        timestamp = datetime.now().strftime('%H%M%S')
+        # Use the same email from registration
         login_data = {
-            "email": f"test_driver_{timestamp}@meditrans.ca",
+            "email": self.test_email,
             "password": "TestPass123!"
         }
         
