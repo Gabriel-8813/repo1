@@ -128,7 +128,8 @@
 
 /* Price tag */
 .price-tag {
-    @apply font-archivo font-black text-4xl tracking-tight;
+    font-family: 'Archivo', sans-serif;
+    @apply font-black text-4xl tracking-tight;
 }
 
 /* Metric display */
