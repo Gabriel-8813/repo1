@@ -1,34 +1,213 @@
-.App-logo {
-    height: 40vmin;
-    pointer-events: none;
+/* MediTrans Ontario - Custom Styles */
+
+.hero-gradient {
+    background: linear-gradient(135deg, #0F172A 0%, #1E293B 100%);
 }
 
-@media (prefers-reduced-motion: no-preference) {
-    .App-logo {
-        animation: App-logo-spin infinite 20s linear;
-    }
+.glass-card {
+    backdrop-filter: blur(12px);
+    background: rgba(255, 255, 255, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.2);
 }
 
-.App-header {
-    background-color: #0f0f10;
-    min-height: 100vh;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    font-size: calc(10px + 2vmin);
-    color: white;
+.dark .glass-card {
+    background: rgba(15, 23, 42, 0.85);
+    border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.App-link {
-    color: #61dafb;
-}
-
-@keyframes App-logo-spin {
+/* Animations */
+@keyframes fadeInUp {
     from {
-        transform: rotate(0deg);
+        opacity: 0;
+        transform: translateY(20px);
     }
     to {
-        transform: rotate(360deg);
+        opacity: 1;
+        transform: translateY(0);
     }
+}
+
+@keyframes slideIn {
+    from {
+        opacity: 0;
+        transform: translateX(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+@keyframes pulse-glow {
+    0%, 100% {
+        box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.4);
+    }
+    50% {
+        box-shadow: 0 0 20px 5px rgba(37, 99, 235, 0.2);
+    }
+}
+
+.animate-fade-in-up {
+    animation: fadeInUp 0.5s ease-out forwards;
+}
+
+.animate-slide-in {
+    animation: slideIn 0.4s ease-out forwards;
+}
+
+.animate-pulse-glow {
+    animation: pulse-glow 2s infinite;
+}
+
+/* Staggered animations */
+.stagger-1 { animation-delay: 0.1s; }
+.stagger-2 { animation-delay: 0.2s; }
+.stagger-3 { animation-delay: 0.3s; }
+.stagger-4 { animation-delay: 0.4s; }
+.stagger-5 { animation-delay: 0.5s; }
+
+/* Button styles */
+.btn-primary {
+    @apply bg-blue-600 hover:bg-blue-700 text-white font-medium px-6 py-3 rounded-full transition-all duration-200 hover:shadow-lg hover:scale-[1.02];
+}
+
+.btn-outline {
+    @apply border-2 border-slate-300 hover:border-blue-600 text-slate-700 hover:text-blue-600 font-medium px-6 py-3 rounded-full transition-all duration-200;
+}
+
+.dark .btn-outline {
+    @apply border-slate-600 text-slate-200 hover:border-blue-500 hover:text-blue-400;
+}
+
+/* Card hover effects */
+.card-hover {
+    @apply transition-all duration-300;
+}
+
+.card-hover:hover {
+    @apply shadow-[0_8px_24px_rgba(0,0,0,0.12)] -translate-y-1;
+}
+
+/* Status badges */
+.status-valid {
+    @apply bg-emerald-100 text-emerald-700 border-emerald-200;
+}
+
+.status-pending {
+    @apply bg-amber-100 text-amber-700 border-amber-200;
+}
+
+.status-expired {
+    @apply bg-red-100 text-red-700 border-red-200;
+}
+
+.dark .status-valid {
+    @apply bg-emerald-900/30 text-emerald-400 border-emerald-800;
+}
+
+.dark .status-pending {
+    @apply bg-amber-900/30 text-amber-400 border-amber-800;
+}
+
+.dark .status-expired {
+    @apply bg-red-900/30 text-red-400 border-red-800;
+}
+
+/* Job urgency badges */
+.urgency-standard {
+    @apply bg-slate-100 text-slate-600;
+}
+
+.urgency-urgent {
+    @apply bg-amber-100 text-amber-700;
+}
+
+.urgency-emergency {
+    @apply bg-red-100 text-red-700;
+}
+
+/* Price tag */
+.price-tag {
+    @apply font-archivo font-black text-4xl tracking-tight;
+}
+
+/* Metric display */
+.metric-value {
+    font-family: 'Archivo', sans-serif;
+    @apply text-4xl font-black text-slate-900 tracking-tight;
+}
+
+.dark .metric-value {
+    @apply text-slate-100;
+}
+
+.metric-label {
+    font-family: 'Public Sans', sans-serif;
+    @apply text-sm text-slate-500 font-medium;
+}
+
+/* Job row */
+.job-row {
+    @apply border-b border-slate-100 hover:bg-slate-50 transition-colors p-4;
+}
+
+.dark .job-row {
+    @apply border-slate-800 hover:bg-slate-800/50;
+}
+
+/* Navigation */
+.nav-link {
+    @apply text-slate-600 hover:text-blue-600 font-medium transition-colors px-4 py-2;
+}
+
+.nav-link.active {
+    @apply text-blue-600;
+}
+
+.dark .nav-link {
+    @apply text-slate-300 hover:text-blue-400;
+}
+
+.dark .nav-link.active {
+    @apply text-blue-400;
+}
+
+/* Form styles */
+.form-input {
+    @apply w-full px-4 py-3 border border-slate-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all;
+}
+
+.dark .form-input {
+    @apply bg-slate-800 border-slate-700 text-white;
+}
+
+/* Pricing card */
+.pricing-card {
+    @apply bg-white rounded-lg p-8 shadow-[0_2px_8px_rgba(0,0,0,0.08)] transition-all duration-300;
+}
+
+.pricing-card:hover {
+    @apply shadow-[0_8px_24px_rgba(0,0,0,0.12)];
+}
+
+.pricing-card.featured {
+    @apply border-2 border-blue-600 relative;
+}
+
+.pricing-card.featured::before {
+    content: 'Most Popular';
+    @apply absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs font-semibold px-3 py-1 rounded-full;
+}
+
+.dark .pricing-card {
+    @apply bg-slate-800;
+}
+
+/* Ontario badge */
+.ontario-badge {
+    @apply inline-flex items-center gap-2 bg-red-50 text-red-700 px-3 py-1 rounded-full text-sm font-medium;
+}
+
+.dark .ontario-badge {
+    @apply bg-red-900/30 text-red-400;
 }
