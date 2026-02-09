@@ -337,10 +337,18 @@ async def update_driver_permit(permit_id: str, completed: bool, current_user: di
     permits = profile.get("permits", {})
     permits[permit_id] = completed
     
-    await db.users.update_one(
-        {"id": current_user["id"]},
-        {"$set": {"driver_profile.permits": permits}}
-    )
+    # Initialize driver_profile if it's null
+    if current_user.get("driver_profile") is None:
+        profile = {"permits": permits}
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            {"$set": {"driver_profile": profile}}
+        )
+    else:
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            {"$set": {"driver_profile.permits": permits}}
+        )
     return {"permit_id": permit_id, "completed": completed}
 
 # Subscription & Payment Routes
