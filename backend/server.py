@@ -1,15 +1,17 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from typing import List, Optional, Dict
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, timedelta
+import bcrypt
+import jwt
+from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
@@ -19,52 +21,619 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
-app = FastAPI()
+# JWT Config
+JWT_SECRET = os.environ.get('JWT_SECRET_KEY', 'meditrans_secret_key')
+JWT_ALGORITHM = "HS256"
+JWT_EXPIRATION_HOURS = 24
+
+# Stripe Config
+STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+
+# Subscription Plans
+SUBSCRIPTION_PLANS = {
+    "basic": {"name": "Basic", "price": 49.00, "features": ["Up to 20 jobs/month", "Basic support", "Standard job alerts"]},
+    "pro": {"name": "Pro", "price": 99.00, "features": ["Up to 50 jobs/month", "Priority support", "Advanced job matching", "Earnings analytics"]},
+    "premium": {"name": "Premium", "price": 149.00, "features": ["Unlimited jobs", "24/7 premium support", "First access to jobs", "Full analytics suite", "Priority badge"]}
+}
+
+# Ontario Permit Requirements
+ONTARIO_PERMITS = [
+    {
+        "id": "cvor",
+        "name": "Commercial Vehicle Operator's Registration (CVOR)",
+        "description": "Required for operating commercial motor vehicles in Ontario",
+        "issuing_authority": "Ontario Ministry of Transportation",
+        "url": "https://www.ontario.ca/page/commercial-vehicle-operators-registration-cvor",
+        "required": True
+    },
+    {
+        "id": "tdg",
+        "name": "Transportation of Dangerous Goods (TDG) Certificate",
+        "description": "Required for transporting biological and medical materials classified as dangerous goods",
+        "issuing_authority": "Transport Canada",
+        "url": "https://tc.canada.ca/en/dangerous-goods/transportation-dangerous-goods-training",
+        "required": True
+    },
+    {
+        "id": "driver_license",
+        "name": "Ontario Driver's License (Class G or higher)",
+        "description": "Valid Ontario driver's license appropriate for vehicle class",
+        "issuing_authority": "ServiceOntario",
+        "url": "https://www.ontario.ca/page/get-g-drivers-licence-new-drivers",
+        "required": True
+    },
+    {
+        "id": "vulnerable_sector",
+        "name": "Vulnerable Sector Check",
+        "description": "Criminal background check required for handling sensitive medical deliveries",
+        "issuing_authority": "Local Police Service",
+        "url": "https://www.ontario.ca/page/police-record-checks",
+        "required": True
+    },
+    {
+        "id": "vehicle_insurance",
+        "name": "Commercial Vehicle Insurance",
+        "description": "Minimum $2M liability coverage for commercial medical transport",
+        "issuing_authority": "Licensed Insurance Provider",
+        "url": "https://www.fsrao.ca/consumers/auto-insurance",
+        "required": True
+    },
+    {
+        "id": "first_aid",
+        "name": "First Aid & CPR Certification",
+        "description": "Standard first aid with CPR level C certification",
+        "issuing_authority": "Red Cross or St. John Ambulance",
+        "url": "https://www.redcross.ca/training-and-certification/course-descriptions/first-aid-at-home-background-information/standard-first-aid",
+        "required": False
+    }
+]
+
+# Create the main app
+app = FastAPI(title="MediTrans Ontario API")
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# Pydantic Models
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    full_name: str
+    phone: str
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
+class UserLogin(BaseModel):
+    email: EmailStr
+    password: str
+
+class UserResponse(BaseModel):
+    id: str
+    email: str
+    full_name: str
+    phone: str
+    role: str
+    subscription_plan: Optional[str] = None
+    subscription_status: Optional[str] = None
+    subscription_expires: Optional[str] = None
+    created_at: str
+
+class TokenResponse(BaseModel):
+    access_token: str
+    token_type: str
+    user: UserResponse
+
+class DriverProfile(BaseModel):
+    vehicle_type: str
+    vehicle_year: int
+    vehicle_make: str
+    vehicle_model: str
+    license_plate: str
+    permits: Dict[str, bool] = {}
+
+class DriverProfileUpdate(BaseModel):
+    vehicle_type: Optional[str] = None
+    vehicle_year: Optional[int] = None
+    vehicle_make: Optional[str] = None
+    vehicle_model: Optional[str] = None
+    license_plate: Optional[str] = None
+    permits: Optional[Dict[str, bool]] = None
+
+class JobCreate(BaseModel):
+    title: str
+    pickup_address: str
+    delivery_address: str
+    pickup_city: str
+    delivery_city: str
+    goods_type: str
+    temperature_controlled: bool = False
+    urgency: str = "standard"  # standard, urgent, emergency
+    estimated_distance_km: float
+    offered_price: float
+    notes: Optional[str] = None
+
+class JobResponse(BaseModel):
+    id: str
+    title: str
+    pickup_address: str
+    delivery_address: str
+    pickup_city: str
+    delivery_city: str
+    goods_type: str
+    temperature_controlled: bool
+    urgency: str
+    estimated_distance_km: float
+    offered_price: float
+    notes: Optional[str]
+    status: str
+    posted_by: str
+    accepted_by: Optional[str]
+    created_at: str
+    accepted_at: Optional[str]
+    completed_at: Optional[str]
+
+class FeeAgreement(BaseModel):
+    base_rate_per_km: float = 1.50
+    minimum_fee: float = 25.00
+    urgent_multiplier: float = 1.5
+    emergency_multiplier: float = 2.0
+    temperature_controlled_fee: float = 15.00
+    platform_commission: float = 0.15  # 15%
+
+class CheckoutRequest(BaseModel):
+    plan_id: str
+    origin_url: str
+
+class PaymentTransaction(BaseModel):
+    id: str
+    user_id: str
+    session_id: str
+    plan_id: str
+    amount: float
+    currency: str
+    status: str
+    payment_status: str
+    created_at: str
+    updated_at: str
+
+# Auth helpers
+def hash_password(password: str) -> str:
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def verify_password(password: str, hashed: str) -> bool:
+    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+
+def create_token(user_id: str, email: str) -> str:
+    payload = {
+        "user_id": user_id,
+        "email": email,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
+    }
+    return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+async def get_current_user(request: Request):
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    token = auth_header.split(" ")[1]
+    try:
+        payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+        if not user:
+            raise HTTPException(status_code=401, detail="User not found")
+        return user
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Token expired")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
 
-class StatusCheckCreate(BaseModel):
-    client_name: str
+# Auth Routes
+@api_router.post("/auth/register", response_model=TokenResponse)
+async def register(user_data: UserCreate):
+    existing = await db.users.find_one({"email": user_data.email})
+    if existing:
+        raise HTTPException(status_code=400, detail="Email already registered")
+    
+    user_id = str(uuid.uuid4())
+    user_doc = {
+        "id": user_id,
+        "email": user_data.email,
+        "password_hash": hash_password(user_data.password),
+        "full_name": user_data.full_name,
+        "phone": user_data.phone,
+        "role": "driver",
+        "subscription_plan": None,
+        "subscription_status": None,
+        "subscription_expires": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "driver_profile": None
+    }
+    
+    await db.users.insert_one(user_doc)
+    
+    token = create_token(user_id, user_data.email)
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserResponse(
+            id=user_id,
+            email=user_data.email,
+            full_name=user_data.full_name,
+            phone=user_data.phone,
+            role="driver",
+            subscription_plan=None,
+            subscription_status=None,
+            subscription_expires=None,
+            created_at=user_doc["created_at"]
+        )
+    )
 
-# Add your routes to the router instead of directly to app
+@api_router.post("/auth/login", response_model=TokenResponse)
+async def login(credentials: UserLogin):
+    user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
+    if not user or not verify_password(credentials.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    token = create_token(user["id"], user["email"])
+    return TokenResponse(
+        access_token=token,
+        token_type="bearer",
+        user=UserResponse(
+            id=user["id"],
+            email=user["email"],
+            full_name=user["full_name"],
+            phone=user["phone"],
+            role=user["role"],
+            subscription_plan=user.get("subscription_plan"),
+            subscription_status=user.get("subscription_status"),
+            subscription_expires=user.get("subscription_expires"),
+            created_at=user["created_at"]
+        )
+    )
+
+@api_router.get("/auth/me", response_model=UserResponse)
+async def get_me(current_user: dict = Depends(get_current_user)):
+    return UserResponse(
+        id=current_user["id"],
+        email=current_user["email"],
+        full_name=current_user["full_name"],
+        phone=current_user["phone"],
+        role=current_user["role"],
+        subscription_plan=current_user.get("subscription_plan"),
+        subscription_status=current_user.get("subscription_status"),
+        subscription_expires=current_user.get("subscription_expires"),
+        created_at=current_user["created_at"]
+    )
+
+# Driver Profile Routes
+@api_router.get("/driver/profile")
+async def get_driver_profile(current_user: dict = Depends(get_current_user)):
+    return {"profile": current_user.get("driver_profile")}
+
+@api_router.put("/driver/profile")
+async def update_driver_profile(profile: DriverProfileUpdate, current_user: dict = Depends(get_current_user)):
+    update_data = {k: v for k, v in profile.model_dump().items() if v is not None}
+    if update_data:
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            {"$set": {"driver_profile": {**current_user.get("driver_profile", {}), **update_data}}}
+        )
+    updated_user = await db.users.find_one({"id": current_user["id"]}, {"_id": 0})
+    return {"profile": updated_user.get("driver_profile")}
+
+# Permit Routes
+@api_router.get("/permits")
+async def get_permits():
+    return {"permits": ONTARIO_PERMITS}
+
+@api_router.get("/driver/permits")
+async def get_driver_permits(current_user: dict = Depends(get_current_user)):
+    profile = current_user.get("driver_profile") or {}
+    permits = profile.get("permits", {})
+    return {"permits": permits}
+
+@api_router.put("/driver/permits/{permit_id}")
+async def update_driver_permit(permit_id: str, completed: bool, current_user: dict = Depends(get_current_user)):
+    profile = current_user.get("driver_profile") or {}
+    permits = profile.get("permits", {})
+    permits[permit_id] = completed
+    
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"driver_profile.permits": permits}}
+    )
+    return {"permit_id": permit_id, "completed": completed}
+
+# Subscription & Payment Routes
+@api_router.get("/subscriptions/plans")
+async def get_subscription_plans():
+    return {"plans": SUBSCRIPTION_PLANS}
+
+@api_router.post("/payments/checkout")
+async def create_checkout_session(checkout_req: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    if checkout_req.plan_id not in SUBSCRIPTION_PLANS:
+        raise HTTPException(status_code=400, detail="Invalid plan")
+    
+    plan = SUBSCRIPTION_PLANS[checkout_req.plan_id]
+    
+    host_url = str(request.base_url).rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    
+    success_url = f"{checkout_req.origin_url}/billing?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{checkout_req.origin_url}/billing"
+    
+    checkout_request = CheckoutSessionRequest(
+        amount=plan["price"],
+        currency="cad",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "user_id": current_user["id"],
+            "plan_id": checkout_req.plan_id,
+            "plan_name": plan["name"]
+        }
+    )
+    
+    session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
+    
+    # Create payment transaction record
+    transaction_doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "session_id": session.session_id,
+        "plan_id": checkout_req.plan_id,
+        "amount": plan["price"],
+        "currency": "cad",
+        "status": "pending",
+        "payment_status": "initiated",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.payment_transactions.insert_one(transaction_doc)
+    
+    return {"checkout_url": session.url, "session_id": session.session_id}
+
+@api_router.get("/payments/status/{session_id}")
+async def get_payment_status(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
+    host_url = str(request.base_url).rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    
+    try:
+        status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
+        
+        # Update transaction
+        transaction = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+        
+        if transaction and transaction.get("payment_status") != "paid" and status.payment_status == "paid":
+            # Update transaction status
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {
+                    "status": status.status,
+                    "payment_status": status.payment_status,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            
+            # Activate subscription
+            plan_id = transaction.get("plan_id")
+            expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+            
+            await db.users.update_one(
+                {"id": current_user["id"]},
+                {"$set": {
+                    "subscription_plan": plan_id,
+                    "subscription_status": "active",
+                    "subscription_expires": expires_at
+                }}
+            )
+        
+        return {
+            "status": status.status,
+            "payment_status": status.payment_status,
+            "amount_total": status.amount_total,
+            "currency": status.currency
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.post("/webhook/stripe")
+async def stripe_webhook(request: Request):
+    body = await request.body()
+    signature = request.headers.get("Stripe-Signature")
+    
+    host_url = str(request.base_url).rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    
+    try:
+        webhook_response = await stripe_checkout.handle_webhook(body, signature)
+        
+        if webhook_response.payment_status == "paid":
+            transaction = await db.payment_transactions.find_one(
+                {"session_id": webhook_response.session_id}, {"_id": 0}
+            )
+            
+            if transaction and transaction.get("payment_status") != "paid":
+                await db.payment_transactions.update_one(
+                    {"session_id": webhook_response.session_id},
+                    {"$set": {
+                        "status": "complete",
+                        "payment_status": "paid",
+                        "updated_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                
+                user_id = webhook_response.metadata.get("user_id")
+                plan_id = webhook_response.metadata.get("plan_id")
+                
+                if user_id and plan_id:
+                    expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
+                    await db.users.update_one(
+                        {"id": user_id},
+                        {"$set": {
+                            "subscription_plan": plan_id,
+                            "subscription_status": "active",
+                            "subscription_expires": expires_at
+                        }}
+                    )
+        
+        return {"status": "ok"}
+    except Exception as e:
+        logging.error(f"Webhook error: {e}")
+        return {"status": "error", "message": str(e)}
+
+@api_router.get("/payments/history")
+async def get_payment_history(current_user: dict = Depends(get_current_user)):
+    transactions = await db.payment_transactions.find(
+        {"user_id": current_user["id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return {"transactions": transactions}
+
+# Job Routes
+@api_router.post("/jobs", response_model=JobResponse)
+async def create_job(job: JobCreate, current_user: dict = Depends(get_current_user)):
+    job_id = str(uuid.uuid4())
+    job_doc = {
+        "id": job_id,
+        **job.model_dump(),
+        "status": "open",
+        "posted_by": current_user["id"],
+        "accepted_by": None,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "accepted_at": None,
+        "completed_at": None
+    }
+    await db.jobs.insert_one(job_doc)
+    return JobResponse(**job_doc)
+
+@api_router.get("/jobs")
+async def get_jobs(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if status:
+        query["status"] = status
+    
+    jobs = await db.jobs.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return {"jobs": jobs}
+
+@api_router.get("/jobs/available")
+async def get_available_jobs(current_user: dict = Depends(get_current_user)):
+    jobs = await db.jobs.find({"status": "open"}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    return {"jobs": jobs}
+
+@api_router.get("/jobs/my")
+async def get_my_jobs(current_user: dict = Depends(get_current_user)):
+    jobs = await db.jobs.find(
+        {"$or": [{"posted_by": current_user["id"]}, {"accepted_by": current_user["id"]}]},
+        {"_id": 0}
+    ).sort("created_at", -1).to_list(100)
+    return {"jobs": jobs}
+
+@api_router.post("/jobs/{job_id}/accept")
+async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    # Check subscription
+    if not current_user.get("subscription_plan") or current_user.get("subscription_status") != "active":
+        raise HTTPException(status_code=403, detail="Active subscription required to accept jobs")
+    
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["status"] != "open":
+        raise HTTPException(status_code=400, detail="Job is no longer available")
+    
+    await db.jobs.update_one(
+        {"id": job_id},
+        {"$set": {
+            "status": "in_progress",
+            "accepted_by": current_user["id"],
+            "accepted_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    return {"job": updated_job}
+
+@api_router.post("/jobs/{job_id}/complete")
+async def complete_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job["accepted_by"] != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can complete this job")
+    
+    await db.jobs.update_one(
+        {"id": job_id},
+        {"$set": {
+            "status": "completed",
+            "completed_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    
+    # Record earnings
+    earnings_doc = {
+        "id": str(uuid.uuid4()),
+        "driver_id": current_user["id"],
+        "job_id": job_id,
+        "amount": job["offered_price"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.earnings.insert_one(earnings_doc)
+    
+    updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    return {"job": updated_job}
+
+# Fee Agreement Routes
+@api_router.get("/fees/agreement")
+async def get_fee_agreement():
+    return {
+        "agreement": {
+            "base_rate_per_km": 1.50,
+            "minimum_fee": 25.00,
+            "urgent_multiplier": 1.5,
+            "emergency_multiplier": 2.0,
+            "temperature_controlled_fee": 15.00,
+            "platform_commission": 0.15,
+            "currency": "CAD"
+        }
+    }
+
+# Earnings Routes
+@api_router.get("/earnings")
+async def get_earnings(current_user: dict = Depends(get_current_user)):
+    earnings = await db.earnings.find({"driver_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+    total = sum(e.get("amount", 0) for e in earnings)
+    return {"earnings": earnings, "total": total}
+
+@api_router.get("/earnings/stats")
+async def get_earnings_stats(current_user: dict = Depends(get_current_user)):
+    earnings = await db.earnings.find({"driver_id": current_user["id"]}, {"_id": 0}).to_list(1000)
+    
+    total = sum(e.get("amount", 0) for e in earnings)
+    jobs_completed = len(earnings)
+    
+    # This month's earnings
+    now = datetime.now(timezone.utc)
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    this_month = sum(
+        e.get("amount", 0) for e in earnings 
+        if datetime.fromisoformat(e["created_at"]) >= month_start
+    )
+    
+    return {
+        "total_earnings": total,
+        "jobs_completed": jobs_completed,
+        "this_month": this_month,
+        "currency": "CAD"
+    }
+
+# Health check
 @api_router.get("/")
 async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
-    
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
-    
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
-
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
-    
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+    return {"message": "MediTrans Ontario API", "status": "healthy"}
 
 # Include the router in the main app
 app.include_router(api_router)
