@@ -79,8 +79,9 @@ class MediTransAPITester:
     def test_user_registration(self):
         """Test user registration"""
         timestamp = datetime.now().strftime('%H%M%S')
+        self.test_email = f"test_driver_{timestamp}@meditrans.ca"
         user_data = {
-            "email": f"test_driver_{timestamp}@meditrans.ca",
+            "email": self.test_email,
             "password": "TestPass123!",
             "full_name": "Test Driver",
             "phone": "+1-416-555-0123"
