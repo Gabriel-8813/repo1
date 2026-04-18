@@ -12,7 +12,7 @@ Build an app for medical transportation that people can register and pay a month
 ## User Personas
 1. **Driver**: Medical transport professional seeking jobs
 2. **Healthcare Facility**: Posts medical transport requests (future)
-3. **Admin**: Platform management (future)
+3. **Admin (Creator)**: Platform management — auto-promoted via `ADMIN_EMAIL` env
 
 ## Core Requirements (Static)
 - Driver registration with JWT authentication
@@ -38,6 +38,21 @@ Build an app for medical transportation that people can register and pay a month
 - `/api/jobs/available` - Available jobs
 - `/api/jobs/{id}/accept` - Accept job
 - `/api/jobs/{id}/complete` - Complete job
+
+### Admin APIs (Feb 2026)
+- `/api/admin/stats` - Users, jobs, revenue summary
+- `/api/admin/users` + PUT/DELETE - User management (role, subscription)
+- `/api/admin/jobs` + PUT/DELETE - Job oversight
+- `/api/admin/plans` + PUT - Edit subscription tier pricing/features (DB-backed)
+- `/api/admin/fees` + PUT - Edit platform fee agreement (DB-backed)
+- `/api/admin/transactions` - Payment audit
+- All protected by `require_admin` dependency; non-admins receive 403
+
+### Admin UI (Feb 2026)
+- `/admin` route with `AdminRoute` guard (role='admin' only)
+- `AdminDashboardPage.js`: Stats cards + tabs (Users, Jobs, Plans, Fees, Transactions)
+- Edit dialogs for users/jobs/plans with confirm-delete AlertDialogs
+- Admin badge + nav link shown conditionally on Dashboard
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
