@@ -107,9 +107,15 @@ const DashboardPage = () => {
                 <Link to="/jobs" className="nav-link">Jobs</Link>
                 <Link to="/permits" className="nav-link">Permits</Link>
                 <Link to="/billing" className="nav-link">Billing</Link>
+                {user?.role === 'admin' && (
+                  <Link to="/admin" className="nav-link text-purple-700" data-testid="nav-admin-link">Admin</Link>
+                )}
               </div>
             </div>
             <div className="flex items-center gap-4">
+              {user?.role === 'admin' && (
+                <Badge className="bg-purple-100 text-purple-700" data-testid="dashboard-admin-badge">Admin</Badge>
+              )}
               {user?.subscription_plan ? (
                 <Badge className="bg-emerald-100 text-emerald-700 capitalize">
                   {user.subscription_plan} Plan

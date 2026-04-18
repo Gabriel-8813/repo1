@@ -12,6 +12,7 @@ import DashboardPage from "./pages/DashboardPage";
 import JobsPage from "./pages/JobsPage";
 import PermitsPage from "./pages/PermitsPage";
 import BillingPage from "./pages/BillingPage";
+import AdminDashboardPage from "./pages/AdminDashboardPage";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -47,6 +48,24 @@ const PublicRoute = ({ children }) => {
   if (isAuthenticated) {
     return <Navigate to="/dashboard" replace />;
   }
+
+  return children;
+};
+
+// Admin Route - requires admin role
+const AdminRoute = ({ children }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />;
 
   return children;
 };
@@ -104,6 +123,14 @@ function AppRoutes() {
           <ProtectedRoute>
             <BillingPage />
           </ProtectedRoute>
+        } 
+      />
+      <Route 
+        path="/admin" 
+        element={
+          <AdminRoute>
+            <AdminDashboardPage />
+          </AdminRoute>
         } 
       />
 

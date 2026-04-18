@@ -29,12 +29,38 @@ JWT_EXPIRATION_HOURS = 24
 # Stripe Config
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 
-# Subscription Plans
-SUBSCRIPTION_PLANS = {
+# Admin Config
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').lower().strip()
+
+# Default Subscription Plans (seeded to DB on startup; admin can edit via /api/admin/plans)
+DEFAULT_SUBSCRIPTION_PLANS = {
     "basic": {"name": "Basic", "price": 49.00, "features": ["Up to 20 jobs/month", "Basic support", "Standard job alerts"]},
     "pro": {"name": "Pro", "price": 99.00, "features": ["Up to 50 jobs/month", "Priority support", "Advanced job matching", "Earnings analytics"]},
     "premium": {"name": "Premium", "price": 149.00, "features": ["Unlimited jobs", "24/7 premium support", "First access to jobs", "Full analytics suite", "Priority badge"]}
 }
+
+# Default Fee Agreement
+DEFAULT_FEE_AGREEMENT = {
+    "base_rate_per_km": 1.50,
+    "minimum_fee": 25.00,
+    "urgent_multiplier": 1.5,
+    "emergency_multiplier": 2.0,
+    "temperature_controlled_fee": 15.00,
+    "platform_commission": 0.15,
+    "currency": "CAD"
+}
+
+async def get_plans_from_db() -> dict:
+    doc = await db.settings.find_one({"key": "subscription_plans"}, {"_id": 0})
+    if doc and doc.get("value"):
+        return doc["value"]
+    return DEFAULT_SUBSCRIPTION_PLANS
+
+async def get_fees_from_db() -> dict:
+    doc = await db.settings.find_one({"key": "fee_agreement"}, {"_id": 0})
+    if doc and doc.get("value"):
+        return doc["value"]
+    return DEFAULT_FEE_AGREEMENT
 
 # Ontario Permit Requirements
 ONTARIO_PERMITS = [
@@ -194,6 +220,34 @@ class PaymentTransaction(BaseModel):
     created_at: str
     updated_at: str
 
+# Admin Models
+class AdminUserUpdate(BaseModel):
+    full_name: Optional[str] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None  # "admin" or "driver"
+    subscription_plan: Optional[str] = None
+    subscription_status: Optional[str] = None
+
+class PlanUpdate(BaseModel):
+    name: Optional[str] = None
+    price: Optional[float] = None
+    features: Optional[List[str]] = None
+
+class FeeAgreementUpdate(BaseModel):
+    base_rate_per_km: Optional[float] = None
+    minimum_fee: Optional[float] = None
+    urgent_multiplier: Optional[float] = None
+    emergency_multiplier: Optional[float] = None
+    temperature_controlled_fee: Optional[float] = None
+    platform_commission: Optional[float] = None
+
+class JobAdminUpdate(BaseModel):
+    title: Optional[str] = None
+    status: Optional[str] = None
+    offered_price: Optional[float] = None
+    urgency: Optional[str] = None
+    notes: Optional[str] = None
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -226,6 +280,11 @@ async def get_current_user(request: Request):
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
 
+async def require_admin(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    return current_user
+
 # Auth Routes
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
@@ -234,13 +293,15 @@ async def register(user_data: UserCreate):
         raise HTTPException(status_code=400, detail="Email already registered")
     
     user_id = str(uuid.uuid4())
+    # Auto-promote creator admin based on ADMIN_EMAIL env
+    role = "admin" if ADMIN_EMAIL and user_data.email.lower().strip() == ADMIN_EMAIL else "driver"
     user_doc = {
         "id": user_id,
         "email": user_data.email,
         "password_hash": hash_password(user_data.password),
         "full_name": user_data.full_name,
         "phone": user_data.phone,
-        "role": "driver",
+        "role": role,
         "subscription_plan": None,
         "subscription_status": None,
         "subscription_expires": None,
@@ -259,7 +320,7 @@ async def register(user_data: UserCreate):
             email=user_data.email,
             full_name=user_data.full_name,
             phone=user_data.phone,
-            role="driver",
+            role=role,
             subscription_plan=None,
             subscription_status=None,
             subscription_expires=None,
@@ -273,6 +334,10 @@ async def login(credentials: UserLogin):
     if not user or not verify_password(credentials.password, user["password_hash"]):
         raise HTTPException(status_code=401, detail="Invalid credentials")
     
+    # Lazy auto-promote if ADMIN_EMAIL matches and user isn't admin yet
+    if ADMIN_EMAIL and user["email"].lower().strip() == ADMIN_EMAIL and user.get("role") != "admin":
+        await db.users.update_one({"id": user["id"]}, {"$set": {"role": "admin"}})
+        user["role"] = "admin"
     token = create_token(user["id"], user["email"])
     return TokenResponse(
         access_token=token,
@@ -354,14 +419,16 @@ async def update_driver_permit(permit_id: str, completed: bool, current_user: di
 # Subscription & Payment Routes
 @api_router.get("/subscriptions/plans")
 async def get_subscription_plans():
-    return {"plans": SUBSCRIPTION_PLANS}
+    plans = await get_plans_from_db()
+    return {"plans": plans}
 
 @api_router.post("/payments/checkout")
 async def create_checkout_session(checkout_req: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
-    if checkout_req.plan_id not in SUBSCRIPTION_PLANS:
+    plans = await get_plans_from_db()
+    if checkout_req.plan_id not in plans:
         raise HTTPException(status_code=400, detail="Invalid plan")
     
-    plan = SUBSCRIPTION_PLANS[checkout_req.plan_id]
+    plan = plans[checkout_req.plan_id]
     
     host_url = str(request.base_url).rstrip('/')
     webhook_url = f"{host_url}/api/webhook/stripe"
@@ -597,17 +664,8 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
 # Fee Agreement Routes
 @api_router.get("/fees/agreement")
 async def get_fee_agreement():
-    return {
-        "agreement": {
-            "base_rate_per_km": 1.50,
-            "minimum_fee": 25.00,
-            "urgent_multiplier": 1.5,
-            "emergency_multiplier": 2.0,
-            "temperature_controlled_fee": 15.00,
-            "platform_commission": 0.15,
-            "currency": "CAD"
-        }
-    }
+    fees = await get_fees_from_db()
+    return {"agreement": fees}
 
 # Earnings Routes
 @api_router.get("/earnings")
@@ -638,6 +696,130 @@ async def get_earnings_stats(current_user: dict = Depends(get_current_user)):
         "currency": "CAD"
     }
 
+# ======================
+# Admin Routes (RBAC)
+# ======================
+@api_router.get("/admin/stats")
+async def admin_stats(admin: dict = Depends(require_admin)):
+    total_users = await db.users.count_documents({})
+    admin_count = await db.users.count_documents({"role": "admin"})
+    active_subs = await db.users.count_documents({"subscription_status": "active"})
+    total_jobs = await db.jobs.count_documents({})
+    open_jobs = await db.jobs.count_documents({"status": "open"})
+    in_progress_jobs = await db.jobs.count_documents({"status": "in_progress"})
+    completed_jobs = await db.jobs.count_documents({"status": "completed"})
+    total_tx = await db.payment_transactions.count_documents({"payment_status": "paid"})
+    paid_tx_list = await db.payment_transactions.find(
+        {"payment_status": "paid"}, {"_id": 0, "amount": 1}
+    ).to_list(10000)
+    revenue = sum(t.get("amount", 0) for t in paid_tx_list)
+    return {
+        "total_users": total_users,
+        "admin_count": admin_count,
+        "active_subscriptions": active_subs,
+        "total_jobs": total_jobs,
+        "open_jobs": open_jobs,
+        "in_progress_jobs": in_progress_jobs,
+        "completed_jobs": completed_jobs,
+        "paid_transactions": total_tx,
+        "total_revenue": round(revenue, 2),
+        "currency": "CAD"
+    }
+
+@api_router.get("/admin/users")
+async def admin_list_users(admin: dict = Depends(require_admin)):
+    users = await db.users.find({}, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(1000)
+    return {"users": users}
+
+@api_router.put("/admin/users/{user_id}")
+async def admin_update_user(user_id: str, update: AdminUserUpdate, admin: dict = Depends(require_admin)):
+    target = await db.users.find_one({"id": user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if data.get("role") and data["role"] not in ("admin", "driver"):
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if data:
+        await db.users.update_one({"id": user_id}, {"$set": data})
+    updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return {"user": updated}
+
+@api_router.delete("/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete yourself")
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    return {"status": "deleted", "user_id": user_id}
+
+@api_router.get("/admin/jobs")
+async def admin_list_jobs(admin: dict = Depends(require_admin)):
+    jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return {"jobs": jobs}
+
+@api_router.put("/admin/jobs/{job_id}")
+async def admin_update_job(job_id: str, update: JobAdminUpdate, admin: dict = Depends(require_admin)):
+    existing = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Job not found")
+    data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if data.get("status") and data["status"] not in ("open", "in_progress", "completed", "cancelled"):
+        raise HTTPException(status_code=400, detail="Invalid status")
+    if data:
+        await db.jobs.update_one({"id": job_id}, {"$set": data})
+    updated = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    return {"job": updated}
+
+@api_router.delete("/admin/jobs/{job_id}")
+async def admin_delete_job(job_id: str, admin: dict = Depends(require_admin)):
+    result = await db.jobs.delete_one({"id": job_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"status": "deleted", "job_id": job_id}
+
+@api_router.get("/admin/plans")
+async def admin_get_plans(admin: dict = Depends(require_admin)):
+    plans = await get_plans_from_db()
+    return {"plans": plans}
+
+@api_router.put("/admin/plans/{plan_id}")
+async def admin_update_plan(plan_id: str, update: PlanUpdate, admin: dict = Depends(require_admin)):
+    plans = await get_plans_from_db()
+    if plan_id not in plans:
+        raise HTTPException(status_code=404, detail="Plan not found")
+    data = {k: v for k, v in update.model_dump().items() if v is not None}
+    plans[plan_id] = {**plans[plan_id], **data}
+    await db.settings.update_one(
+        {"key": "subscription_plans"},
+        {"$set": {"value": plans, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"plans": plans}
+
+@api_router.get("/admin/fees")
+async def admin_get_fees(admin: dict = Depends(require_admin)):
+    fees = await get_fees_from_db()
+    return {"agreement": fees}
+
+@api_router.put("/admin/fees")
+async def admin_update_fees(update: FeeAgreementUpdate, admin: dict = Depends(require_admin)):
+    fees = await get_fees_from_db()
+    data = {k: v for k, v in update.model_dump().items() if v is not None}
+    fees = {**fees, **data}
+    fees["currency"] = "CAD"
+    await db.settings.update_one(
+        {"key": "fee_agreement"},
+        {"$set": {"value": fees, "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True
+    )
+    return {"agreement": fees}
+
+@api_router.get("/admin/transactions")
+async def admin_list_transactions(admin: dict = Depends(require_admin)):
+    tx = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return {"transactions": tx}
+
 # Health check
 @api_router.get("/")
 async def root():
@@ -660,6 +842,29 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+@app.on_event("startup")
+async def startup_event():
+    # Seed default plans/fees if missing
+    if not await db.settings.find_one({"key": "subscription_plans"}):
+        await db.settings.insert_one({
+            "key": "subscription_plans",
+            "value": DEFAULT_SUBSCRIPTION_PLANS,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+    if not await db.settings.find_one({"key": "fee_agreement"}):
+        await db.settings.insert_one({
+            "key": "fee_agreement",
+            "value": DEFAULT_FEE_AGREEMENT,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        })
+    # Auto-promote admin if ADMIN_EMAIL user already exists
+    if ADMIN_EMAIL:
+        await db.users.update_one(
+            {"email": ADMIN_EMAIL},
+            {"$set": {"role": "admin"}}
+        )
+        logger.info(f"Admin auto-promote ensured for: {ADMIN_EMAIL}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():
