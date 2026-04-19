@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useUrgentJobAlerts } from '../hooks/useUrgentJobAlerts';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
+import ChangePasswordDialog from '../components/ChangePasswordDialog';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Progress } from '../components/ui/progress';
@@ -135,6 +136,7 @@ const DashboardPage = () => {
               {user?.role === 'admin' && (
                 <Badge className="bg-purple-100 text-purple-700" data-testid="dashboard-admin-badge">Admin</Badge>
               )}
+              <ChangePasswordDialog token={token} />
               <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn">
                 <LogOut className="w-4 h-4 mr-2" /> Logout
               </Button>
