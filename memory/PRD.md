@@ -65,6 +65,13 @@ Build an app for medical transportation that people can register and pay a month
 - **Added**: `/api/admin/ledger` + stats updated with `commission_owed/paid`, `cancellation_fees_owed/paid`, `total_outstanding`
 - **Admin-editable**: commission rate, cancellation fee, grace window via Fees tab
 - **Frontend**: BillingPage rewritten (balance + ledger + fee agreement); JobsPage adds Cancel button with grace countdown; Dashboard shows balance alert; Landing page swapped subscription tiers for commission messaging
+
+### Permits Editor + Real-Time Urgent Jobs (Feb 19 2026)
+- **Backend**: Ontario permits migrated from hardcoded `ONTARIO_PERMITS` list to `db.permits` collection (seeded on first startup). Full admin CRUD: `GET/POST/PUT/DELETE /api/admin/permits`. Public `/api/permits` reads from DB.
+- **Admin UI**: New **Permits** tab with Add/Edit/Delete dialogs (confirm-delete AlertDialog, required-flag checkbox). All 6 Ontario permits editable live.
+- **Frontend**: New `useUrgentJobAlerts` hook (15s polling) wired into Dashboard + Jobs pages. On newly posted urgent/emergency jobs: sonner toast (red for emergency, amber for urgent) + red "Urgent Jobs" banner on Dashboard with Dismiss / View All buttons.
+- **Bug fix**: `/api/jobs/{id}/cancel` now returns 400 for cancelling an open job (was 403).
+- **Tested**: 10/10 backend pytest + 10/10 frontend Playwright — zero issues.
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
