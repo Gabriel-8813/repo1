@@ -104,3 +104,12 @@ credentials.json
 *.pem
 *.key
 .credentials
+
+# Capacitor native projects (committed separately or locally only)
+frontend/ios/App/Pods/
+frontend/ios/App/build/
+frontend/ios/DerivedData/
+frontend/android/.gradle/
+frontend/android/build/
+frontend/android/app/build/
+frontend/android/local.properties

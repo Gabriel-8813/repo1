@@ -91,6 +91,14 @@ Build an app for medical transportation that people can register and pay a month
 - **Backend**: New `reviews` collection. Public endpoints `GET /api/reviews/info/{job_id}`, `POST /api/reviews/{job_id}` (1-5 stars, optional comment + reviewer name; one review per trip; completed-trip only). `GET /api/drivers/{id}/reviews` for public driver rating page. `GET /api/driver/reviews` for driver's own feed. Admin moderation: `GET /api/admin/reviews`, `POST /api/admin/reviews/{id}/hide` (soft), `DELETE /api/admin/reviews/{id}` (hard).
 - **Frontend**: New public `/rate/:jobId` page with interactive `StarRating` component + comment + reviewer name. Tip page success screen now shows a post-tip rating prompt; main tip view has a "Don't want to tip? Rate X instead" fallback link. Dashboard has new "Your Rating" stat card (★ avg + review count). Admin dashboard has new **Reviews** tab with hide (EyeOff) + delete (confirm AlertDialog) actions.
 - **Tested**: 23/23 backend pytest + 7/7 frontend Playwright flows — zero issues.
+
+### Capacitor Mobile Wrap (Feb 19 2026)
+- **Packages installed**: `@capacitor/core@^7`, `@capacitor/cli@^7`, `@capacitor/ios@^7`, `@capacitor/android@^7` (Capacitor 8 required Node 22, not available in this env).
+- **Config**: `frontend/capacitor.config.json` — `appId=ca.meditrans.app`, `appName=MediTrans`, `webDir=build`.
+- **Scaffolded**: `frontend/ios/App/App.xcworkspace` (ready to open in Xcode on Mac), `frontend/android/` (ready to open in Android Studio).
+- **Scripts**: `yarn build:mobile` (build + sync), `yarn ios:open`, `yarn android:open`.
+- **Guide**: `/app/MOBILE.md` — full walkthrough from `git clone` on Mac → Xcode signing → App Store submission, including Stripe-is-allowed note for physical-service payments.
+- **No native features yet**: network-only permissions; camera/location/push can be added when needed via Capacitor plugins.
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
