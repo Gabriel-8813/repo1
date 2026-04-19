@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useUrgentJobAlerts } from '../hooks/useUrgentJobAlerts';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -26,9 +27,18 @@ const DashboardPage = () => {
   const [balance, setBalance] = useState({ owed: 0, paid: 0, entries: [] });
   const [loading, setLoading] = useState(true);
 
+  // Real-time polling for urgent/emergency jobs — fires toast when new ones appear
+  const { urgentCount, newlyArrived, clearNewlyArrived } = useUrgentJobAlerts(token, true);
+
   useEffect(() => {
     fetchData();
   }, [token]);
+
+  // Refresh dashboard list when a new urgent job is detected
+  useEffect(() => {
+    if (newlyArrived.length > 0) fetchData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newlyArrived.length]);
 
   const fetchData = async () => {
     try {
@@ -135,6 +145,41 @@ const DashboardPage = () => {
           </h1>
           <p className="text-slate-600 mt-1">Here's what's happening with your deliveries.</p>
         </div>
+
+        {/* Live Urgent Jobs Alert */}
+        {newlyArrived.length > 0 && (
+          <Card className="mb-8 border-red-300 bg-red-50" data-testid="urgent-jobs-alert">
+            <CardContent className="p-5">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-10 h-10 bg-red-100 rounded-full flex items-center justify-center mt-0.5">
+                    <AlertTriangle className="w-5 h-5 text-red-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-semibold text-slate-900">
+                      {newlyArrived.length} new {newlyArrived.length === 1 ? 'urgent job' : 'urgent jobs'} just posted
+                    </h3>
+                    <ul className="mt-2 space-y-1">
+                      {newlyArrived.slice(0, 3).map(j => (
+                        <li key={j.id} className="text-sm text-slate-700">
+                          <span className={`inline-block w-2 h-2 rounded-full mr-2 ${j.urgency === 'emergency' ? 'bg-red-500' : 'bg-amber-500'}`}></span>
+                          <span className="font-medium">{j.title}</span>
+                          <span className="text-slate-500"> — {j.pickup_city} → {j.delivery_city} · ${j.offered_price.toFixed(2)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+                <div className="flex gap-2 flex-shrink-0">
+                  <Button size="sm" variant="outline" onClick={clearNewlyArrived} data-testid="dismiss-urgent-btn">Dismiss</Button>
+                  <Button size="sm" className="bg-red-600 hover:bg-red-700" onClick={() => navigate('/jobs')} data-testid="view-urgent-btn">
+                    View All <ArrowRight className="w-3 h-3 ml-1" />
+                  </Button>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Balance Owed Alert */}
         {balance.owed > 0 && (

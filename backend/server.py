@@ -231,6 +231,21 @@ class JobAdminUpdate(BaseModel):
     urgency: Optional[str] = None
     notes: Optional[str] = None
 
+class PermitCreate(BaseModel):
+    id: str
+    name: str
+    description: str
+    issuing_authority: str
+    url: str
+    required: bool = True
+
+class PermitUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    issuing_authority: Optional[str] = None
+    url: Optional[str] = None
+    required: Optional[bool] = None
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -359,7 +374,8 @@ async def update_driver_profile(profile: DriverProfileUpdate, current_user: dict
 # Permit Routes
 @api_router.get("/permits")
 async def get_permits():
-    return {"permits": ONTARIO_PERMITS}
+    permits = await db.permits.find({}, {"_id": 0}).sort("order", 1).to_list(1000)
+    return {"permits": permits}
 
 @api_router.get("/driver/permits")
 async def get_driver_permits(current_user: dict = Depends(get_current_user)):
@@ -861,6 +877,42 @@ async def admin_list_transactions(admin: dict = Depends(require_admin)):
     tx = await db.payment_transactions.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return {"transactions": tx}
 
+# Admin: Permit requirement management
+@api_router.get("/admin/permits")
+async def admin_list_permits(admin: dict = Depends(require_admin)):
+    permits = await db.permits.find({}, {"_id": 0}).sort("order", 1).to_list(1000)
+    return {"permits": permits}
+
+@api_router.post("/admin/permits")
+async def admin_create_permit(permit: PermitCreate, admin: dict = Depends(require_admin)):
+    existing = await db.permits.find_one({"id": permit.id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Permit id already exists")
+    count = await db.permits.count_documents({})
+    doc = {**permit.model_dump(), "order": count + 1,
+           "created_at": datetime.now(timezone.utc).isoformat()}
+    await db.permits.insert_one(doc)
+    doc.pop("_id", None)
+    return {"permit": doc}
+
+@api_router.put("/admin/permits/{permit_id}")
+async def admin_update_permit(permit_id: str, update: PermitUpdate, admin: dict = Depends(require_admin)):
+    existing = await db.permits.find_one({"id": permit_id}, {"_id": 0})
+    if not existing:
+        raise HTTPException(status_code=404, detail="Permit not found")
+    data = {k: v for k, v in update.model_dump().items() if v is not None}
+    if data:
+        await db.permits.update_one({"id": permit_id}, {"$set": data})
+    updated = await db.permits.find_one({"id": permit_id}, {"_id": 0})
+    return {"permit": updated}
+
+@api_router.delete("/admin/permits/{permit_id}")
+async def admin_delete_permit(permit_id: str, admin: dict = Depends(require_admin)):
+    result = await db.permits.delete_one({"id": permit_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Permit not found")
+    return {"status": "deleted", "permit_id": permit_id}
+
 # Health check
 @api_router.get("/")
 async def root():
@@ -893,6 +945,12 @@ async def startup_event():
             "value": DEFAULT_FEE_AGREEMENT,
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
+    # Seed permits collection from ONTARIO_PERMITS defaults if empty
+    if await db.permits.count_documents({}) == 0:
+        for idx, p in enumerate(ONTARIO_PERMITS):
+            doc = {**p, "order": idx + 1,
+                   "created_at": datetime.now(timezone.utc).isoformat()}
+            await db.permits.insert_one(doc)
     # Clean up legacy subscription_plans settings doc (revenue model switched to commission)
     await db.settings.delete_one({"key": "subscription_plans"})
     # Remove stale subscription fields from users (cosmetic cleanup, harmless if absent)
