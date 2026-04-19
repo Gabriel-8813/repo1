@@ -14,7 +14,7 @@ import {
 } from '../components/ui/alert-dialog';
 import { 
   Truck, MapPin, Clock, CheckCircle, 
-  ArrowRight, Thermometer, LogOut, XCircle
+  ArrowRight, Thermometer, LogOut, XCircle, Link as LinkIcon
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -106,6 +106,17 @@ const JobsPage = () => {
       fetchJobs();
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to cancel job');
+    }
+  };
+
+  const copyTipLink = async (jobId) => {
+    const url = `${window.location.origin}/tip/${jobId}`;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success('Tip link copied — share it with your customer!');
+    } catch {
+      // Fallback: prompt
+      toast.info('Tip link: ' + url, { duration: 10000 });
     }
   };
 
@@ -351,15 +362,26 @@ const JobsPage = () => {
                     <div className="grid gap-4">
                       {completedJobs.map((job) => (
                         <Card key={job.id} className="border-0 shadow-sm bg-slate-50">
-                          <CardContent className="p-6 flex items-center justify-between">
-                            <div>
+                          <CardContent className="p-6 flex items-center justify-between gap-4 flex-wrap">
+                            <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-2">
                                 <h3 className="font-semibold text-slate-700">{job.title}</h3>
                                 <Badge className="bg-slate-200 text-slate-600">Completed</Badge>
                               </div>
                               <p className="text-sm text-slate-500">{job.pickup_city} → {job.delivery_city}</p>
                             </div>
-                            <p className="font-archivo font-bold text-xl text-slate-600">${job.offered_price.toFixed(2)}</p>
+                            <div className="flex items-center gap-3">
+                              <p className="font-archivo font-bold text-xl text-slate-600">${job.offered_price.toFixed(2)}</p>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="rounded-full border-pink-200 text-pink-600 hover:bg-pink-50"
+                                onClick={() => copyTipLink(job.id)}
+                                data-testid={`share-tip-link-${job.id}-btn`}
+                              >
+                                <LinkIcon className="w-4 h-4 mr-2" /> Share Tip Link
+                              </Button>
+                            </div>
                           </CardContent>
                         </Card>
                       ))}

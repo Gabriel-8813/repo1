@@ -472,20 +472,35 @@ async def create_balance_checkout(checkout_req: CheckoutRequest, request: Reques
     return {"checkout_url": session.url, "session_id": session.session_id, "amount": owed_total}
 
 async def _settle_ledger_for_session(session_id: str):
-    """Mark ledger entries as paid once Stripe confirms payment."""
+    """Finalize a paid payment_transaction: settle owed ledger entries OR credit a tip to driver earnings."""
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx or tx.get("payment_status") != "paid":
         return
-    ledger_ids = tx.get("ledger_ids") or []
-    if ledger_ids:
-        await db.ledger.update_many(
-            {"id": {"$in": ledger_ids}, "status": "owed"},
-            {"$set": {
-                "status": "paid",
-                "paid_at": datetime.now(timezone.utc).isoformat(),
-                "payment_session_id": session_id
-            }}
-        )
+    payment_type = tx.get("payment_type")
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if payment_type == "balance":
+        ledger_ids = tx.get("ledger_ids") or []
+        if ledger_ids:
+            await db.ledger.update_many(
+                {"id": {"$in": ledger_ids}, "status": "owed"},
+                {"$set": {"status": "paid", "paid_at": now_iso, "payment_session_id": session_id}}
+            )
+    elif payment_type == "tip":
+        # Credit 100% of tip to the driver's earnings (no platform commission on tips)
+        existing = await db.earnings.find_one({"payment_session_id": session_id}, {"_id": 0})
+        if existing:
+            return  # idempotent — already credited
+        await db.earnings.insert_one({
+            "id": str(uuid.uuid4()),
+            "driver_id": tx.get("driver_id"),
+            "job_id": tx.get("job_id"),
+            "type": "tip",
+            "amount": float(tx.get("amount", 0)),
+            "tipper_name": tx.get("tipper_name"),
+            "payment_session_id": session_id,
+            "created_at": now_iso
+        })
 
 @api_router.get("/payments/status/{session_id}")
 async def get_payment_status(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
@@ -552,6 +567,145 @@ async def get_payment_history(current_user: dict = Depends(get_current_user)):
         {"user_id": current_user["id"]}, {"_id": 0}
     ).sort("created_at", -1).to_list(100)
     return {"transactions": transactions}
+
+# ======================
+# Tip Your Driver (public)
+# ======================
+class TipCheckoutRequest(BaseModel):
+    amount: float
+    origin_url: str
+    tipper_name: Optional[str] = None
+
+@api_router.get("/tips/info/{job_id}")
+async def get_tip_info(job_id: str):
+    """Public — no auth. Returns job summary + driver info so customer can decide how much to tip."""
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Tips can only be sent for completed trips")
+    driver_id = job.get("accepted_by")
+    driver = await db.users.find_one({"id": driver_id}, {"_id": 0, "password_hash": 0}) if driver_id else None
+    # Minimum tip = $1
+    offered = float(job.get("offered_price", 0))
+    presets = [
+        {"label": "15%", "amount": round(offered * 0.15, 2)},
+        {"label": "20%", "amount": round(offered * 0.20, 2)},
+        {"label": "25%", "amount": round(offered * 0.25, 2)},
+    ]
+    # Already tipped?
+    existing_tips = await db.earnings.find(
+        {"job_id": job_id, "type": "tip"}, {"_id": 0}
+    ).to_list(100)
+    return {
+        "trip": {
+            "id": job["id"],
+            "title": job["title"],
+            "pickup_city": job["pickup_city"],
+            "delivery_city": job["delivery_city"],
+            "offered_price": offered,
+            "completed_at": job.get("completed_at")
+        },
+        "driver": {
+            "full_name": driver["full_name"] if driver else "Driver",
+            "first_name": (driver["full_name"].split(" ")[0] if driver else "Driver")
+        },
+        "presets": presets,
+        "currency": "CAD",
+        "already_tipped_total": round(sum(t.get("amount", 0) for t in existing_tips), 2)
+    }
+
+@api_router.post("/tips/checkout/{job_id}")
+async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Request):
+    """Public — no auth. Creates a Stripe Checkout for a tip to the assigned driver of a completed trip."""
+    if req.amount <= 0:
+        raise HTTPException(status_code=400, detail="Tip amount must be positive")
+    if req.amount > 10000:
+        raise HTTPException(status_code=400, detail="Tip amount exceeds maximum ($10,000)")
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Tips can only be sent for completed trips")
+    driver_id = job.get("accepted_by")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="No driver on this trip")
+
+    amount = round(float(req.amount), 2)
+
+    host_url = str(request.base_url).rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+
+    success_url = f"{req.origin_url}/tip/{job_id}?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{req.origin_url}/tip/{job_id}"
+
+    checkout_request = CheckoutSessionRequest(
+        amount=amount,
+        currency="cad",
+        success_url=success_url,
+        cancel_url=cancel_url,
+        metadata={
+            "job_id": job_id,
+            "driver_id": driver_id,
+            "payment_type": "tip",
+            "tipper_name": (req.tipper_name or "")[:80]
+        }
+    )
+    session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
+
+    await db.payment_transactions.insert_one({
+        "id": str(uuid.uuid4()),
+        "session_id": session.session_id,
+        "payment_type": "tip",
+        "job_id": job_id,
+        "driver_id": driver_id,
+        "tipper_name": req.tipper_name,
+        "amount": amount,
+        "currency": "cad",
+        "status": "pending",
+        "payment_status": "initiated",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    })
+
+    return {"checkout_url": session.url, "session_id": session.session_id, "amount": amount}
+
+@api_router.get("/tips/status/{session_id}")
+async def get_tip_status(session_id: str, request: Request):
+    """Public — no auth. Lets the tipper poll payment status after redirect."""
+    host_url = str(request.base_url).rstrip('/')
+    webhook_url = f"{host_url}/api/webhook/stripe"
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    try:
+        status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
+        tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+        if tx and tx.get("payment_type") == "tip" and tx.get("payment_status") != "paid" and status.payment_status == "paid":
+            await db.payment_transactions.update_one(
+                {"session_id": session_id},
+                {"$set": {
+                    "status": status.status,
+                    "payment_status": status.payment_status,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            await _settle_ledger_for_session(session_id)
+        return {
+            "status": status.status,
+            "payment_status": status.payment_status,
+            "amount_total": status.amount_total,
+            "currency": status.currency
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@api_router.get("/driver/tips")
+async def get_driver_tips(current_user: dict = Depends(get_current_user)):
+    tips = await db.earnings.find(
+        {"driver_id": current_user["id"], "type": "tip"}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    total = round(sum(t.get("amount", 0) for t in tips), 2)
+    return {"tips": tips, "total": total, "count": len(tips), "currency": "CAD"}
 
 # Job Routes
 @api_router.post("/jobs", response_model=JobResponse)

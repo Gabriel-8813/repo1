@@ -13,6 +13,7 @@ import JobsPage from "./pages/JobsPage";
 import PermitsPage from "./pages/PermitsPage";
 import BillingPage from "./pages/BillingPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
+import TipPage from "./pages/TipPage";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -75,6 +76,7 @@ function AppRoutes() {
     <Routes>
       {/* Public Routes */}
       <Route path="/" element={<LandingPage />} />
+      <Route path="/tip/:jobId" element={<TipPage />} />
       <Route 
         path="/login" 
         element={
