@@ -77,33 +77,16 @@ agenthub/agents/youtube/db
 .cache/
 
 # Mobile development
-android-sdk/ -e 
-# Environment and credential files
-.env
-.env.*
-*.env
+android-sdk/
+
+# Credential files (but allow .env files for Emergent deployment)
 credentials.json
 *.pem
 *.key
 .credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
--e 
-# Environment and credential files
-.env
-.env.*
-*.env
-credentials.json
-*.pem
-*.key
-.credentials
+
+# Keep admin/test creds out of git (not needed for deployment)
+memory/test_credentials.md
 
 # Capacitor native projects (committed separately or locally only)
 frontend/ios/App/Pods/
