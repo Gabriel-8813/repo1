@@ -6,6 +6,8 @@ import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import { Textarea } from '../components/ui/textarea';
+import StarRating from '../components/StarRating';
 import {
   Heart, Truck, CheckCircle, MapPin, Sparkles, ArrowRight
 } from 'lucide-react';
@@ -24,6 +26,11 @@ const TipPage = () => {
   const [tipperName, setTipperName] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [paidState, setPaidState] = useState(null); // null | 'checking' | 'success' | 'failed'
+  const [postTipRating, setPostTipRating] = useState(0);
+  const [postTipComment, setPostTipComment] = useState('');
+  const [postTipSubmitting, setPostTipSubmitting] = useState(false);
+  const [postTipDone, setPostTipDone] = useState(false);
+  const [alreadyReviewed, setAlreadyReviewed] = useState(false);
 
   useEffect(() => {
     fetchInfo();
@@ -39,6 +46,32 @@ const TipPage = () => {
       setError(e.response?.data?.detail || 'Could not load trip');
     } finally {
       setLoading(false);
+    }
+    // Also check if trip was already reviewed (separate public endpoint)
+    try {
+      const rev = await axios.get(`${API}/reviews/info/${jobId}`);
+      setAlreadyReviewed(!!rev.data.already_reviewed);
+    } catch { /* ignore — tip page still works */ }
+  };
+
+  const submitPostTipReview = async () => {
+    if (postTipRating === 0) {
+      toast.error('Please select a rating');
+      return;
+    }
+    setPostTipSubmitting(true);
+    try {
+      await axios.post(`${API}/reviews/${jobId}`, {
+        rating: postTipRating,
+        comment: postTipComment || null,
+        reviewer_name: tipperName || null
+      });
+      setPostTipDone(true);
+      toast.success('Thanks for your review!');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not submit review');
+    } finally {
+      setPostTipSubmitting(false);
     }
   };
 
@@ -121,24 +154,65 @@ const TipPage = () => {
 
   if (paidState === 'success') {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-blue-50 flex items-center justify-center px-6">
+      <div className="min-h-screen bg-gradient-to-br from-emerald-50 to-blue-50 flex items-center justify-center px-6 py-10">
         <Card className="max-w-md w-full shadow-xl border-0" data-testid="tip-success-card">
           <CardContent className="p-10 text-center">
             <div className="w-20 h-20 rounded-full bg-emerald-100 flex items-center justify-center mx-auto mb-6">
               <CheckCircle className="w-10 h-10 text-emerald-600" />
             </div>
             <h1 className="font-archivo font-bold text-3xl text-slate-900 mb-3">Thank you!</h1>
-            <p className="text-slate-600 mb-6">
+            <p className="text-slate-600 mb-4">
               Your tip has been sent to <span className="font-semibold">{info?.driver.first_name}</span>. They'll really appreciate it.
             </p>
             <div className="flex items-center justify-center gap-1 text-red-500 mb-6">
               {[...Array(5)].map((_, i) => <Heart key={i} className="w-5 h-5 fill-current" />)}
             </div>
-            <Link to="/">
-              <Button variant="outline" className="rounded-full">
-                Back to MediTrans <ArrowRight className="w-4 h-4 ml-2" />
-              </Button>
-            </Link>
+
+            {/* Post-tip rating prompt */}
+            {!alreadyReviewed && !postTipDone ? (
+              <div className="border-t border-slate-200 pt-6 mt-2 text-left" data-testid="post-tip-rating-section">
+                <p className="text-center text-sm text-slate-600 mb-3">
+                  Mind rating {info?.driver.first_name}?
+                </p>
+                <div className="flex justify-center mb-4">
+                  <StarRating value={postTipRating} onChange={setPostTipRating} size="md" testidPrefix="tip-rate-star" />
+                </div>
+                {postTipRating > 0 && (
+                  <>
+                    <Label htmlFor="post-tip-comment" className="text-sm">Comment (optional)</Label>
+                    <Textarea
+                      id="post-tip-comment"
+                      placeholder="What went well?"
+                      value={postTipComment}
+                      onChange={e => setPostTipComment(e.target.value)}
+                      rows={2}
+                      className="mb-3"
+                      data-testid="tip-rate-comment-input"
+                    />
+                    <Button
+                      onClick={submitPostTipReview}
+                      disabled={postTipSubmitting}
+                      className="w-full rounded-full bg-blue-600 hover:bg-blue-700"
+                      data-testid="tip-submit-review-btn"
+                    >
+                      {postTipSubmitting ? 'Submitting...' : 'Submit Review'}
+                    </Button>
+                  </>
+                )}
+              </div>
+            ) : postTipDone ? (
+              <div className="border-t border-slate-200 pt-6 mt-2">
+                <p className="text-emerald-700 text-sm font-medium">★ Review submitted — thank you!</p>
+              </div>
+            ) : null}
+
+            <div className="mt-6">
+              <Link to="/">
+                <Button variant="outline" className="rounded-full">
+                  Back to MediTrans <ArrowRight className="w-4 h-4 ml-2" />
+                </Button>
+              </Link>
+            </div>
           </CardContent>
         </Card>
       </div>
@@ -267,6 +341,12 @@ const TipPage = () => {
             </p>
           </CardContent>
         </Card>
+
+        <div className="text-center mt-4">
+          <Link to={`/rate/${jobId}`} className="text-sm text-slate-500 hover:text-blue-600 underline" data-testid="rate-only-link">
+            Don't want to tip? Rate {driver.first_name} instead
+          </Link>
+        </div>
 
         {info.already_tipped_total > 0 && (
           <p className="text-xs text-slate-400 text-center mt-4">
