@@ -22,7 +22,8 @@ import {
 } from '../components/ui/alert-dialog';
 import {
   Shield, Truck, Users, Briefcase, DollarSign, Settings, LogOut,
-  Trash2, Pencil, TrendingUp, AlertCircle, Crown, Percent, Receipt
+  Trash2, Pencil, TrendingUp, AlertCircle, Crown, Percent, Receipt,
+  FileText, Plus
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -37,11 +38,14 @@ const AdminDashboardPage = () => {
   const [fees, setFees] = useState(null);
   const [ledger, setLedger] = useState([]);
   const [transactions, setTransactions] = useState([]);
+  const [permits, setPermits] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [editUser, setEditUser] = useState(null);
   const [editJob, setEditJob] = useState(null);
   const [feeDraft, setFeeDraft] = useState(null);
+  const [editPermit, setEditPermit] = useState(null);
+  const [newPermit, setNewPermit] = useState(null);
 
   const headers = { Authorization: `Bearer ${token}` };
 
@@ -56,13 +60,14 @@ const AdminDashboardPage = () => {
 
   const fetchAll = async () => {
     try {
-      const [s, u, j, f, l, t] = await Promise.all([
+      const [s, u, j, f, l, t, p] = await Promise.all([
         axios.get(`${API}/admin/stats`, { headers }),
         axios.get(`${API}/admin/users`, { headers }),
         axios.get(`${API}/admin/jobs`, { headers }),
         axios.get(`${API}/admin/fees`, { headers }),
         axios.get(`${API}/admin/ledger`, { headers }),
         axios.get(`${API}/admin/transactions`, { headers }),
+        axios.get(`${API}/admin/permits`, { headers }),
       ]);
       setStats(s.data);
       setUsers(u.data.users);
@@ -71,6 +76,7 @@ const AdminDashboardPage = () => {
       setFeeDraft(f.data.agreement);
       setLedger(l.data.entries);
       setTransactions(t.data.transactions);
+      setPermits(p.data.permits);
     } catch (e) {
       toast.error('Failed to load admin data');
       console.error(e);
@@ -150,6 +156,44 @@ const AdminDashboardPage = () => {
     }
   };
 
+  const savePermit = async () => {
+    try {
+      await axios.put(`${API}/admin/permits/${editPermit.id}`, {
+        name: editPermit.name,
+        description: editPermit.description,
+        issuing_authority: editPermit.issuing_authority,
+        url: editPermit.url,
+        required: editPermit.required,
+      }, { headers });
+      toast.success('Permit updated');
+      setEditPermit(null);
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Update failed');
+    }
+  };
+
+  const createPermit = async () => {
+    try {
+      await axios.post(`${API}/admin/permits`, newPermit, { headers });
+      toast.success('Permit created');
+      setNewPermit(null);
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Create failed');
+    }
+  };
+
+  const deletePermit = async (id) => {
+    try {
+      await axios.delete(`${API}/admin/permits/${id}`, { headers });
+      toast.success('Permit deleted');
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Delete failed');
+    }
+  };
+
   if (loading || !stats) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -209,6 +253,7 @@ const AdminDashboardPage = () => {
             <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-2" />Users</TabsTrigger>
             <TabsTrigger value="jobs" data-testid="tab-jobs"><Briefcase className="w-4 h-4 mr-2" />Jobs</TabsTrigger>
             <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees & Commission</TabsTrigger>
+            <TabsTrigger value="permits" data-testid="tab-permits"><FileText className="w-4 h-4 mr-2" />Permits</TabsTrigger>
             <TabsTrigger value="ledger" data-testid="tab-ledger"><Receipt className="w-4 h-4 mr-2" />Ledger</TabsTrigger>
             <TabsTrigger value="tx" data-testid="tab-tx"><DollarSign className="w-4 h-4 mr-2" />Transactions</TabsTrigger>
           </TabsList>
@@ -378,6 +423,74 @@ const AdminDashboardPage = () => {
             </Card>
           </TabsContent>
 
+          <TabsContent value="permits">
+            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="font-archivo">Ontario Permit Requirements ({permits.length})</CardTitle>
+                <Button
+                  onClick={() => setNewPermit({ id: '', name: '', description: '', issuing_authority: '', url: '', required: true })}
+                  className="bg-blue-600 hover:bg-blue-700"
+                  data-testid="add-permit-btn"
+                >
+                  <Plus className="w-4 h-4 mr-2" /> Add Permit
+                </Button>
+              </CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>ID</TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Authority</TableHead>
+                      <TableHead>Required</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {permits.length === 0 ? (
+                      <TableRow><TableCell colSpan={5} className="text-center py-8 text-slate-400">No permits configured</TableCell></TableRow>
+                    ) : permits.map(p => (
+                      <TableRow key={p.id} data-testid={`permit-row-${p.id}`}>
+                        <TableCell className="font-mono text-xs">{p.id}</TableCell>
+                        <TableCell className="font-medium">{p.name}</TableCell>
+                        <TableCell className="text-slate-600 text-sm">{p.issuing_authority}</TableCell>
+                        <TableCell>
+                          <Badge className={p.required ? 'bg-red-100 text-red-700' : 'bg-slate-100 text-slate-700'}>
+                            {p.required ? 'Required' : 'Optional'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right space-x-2">
+                          <Button size="sm" variant="outline" onClick={() => setEditPermit({ ...p })} data-testid={`edit-permit-${p.id}-btn`}>
+                            <Pencil className="w-3 h-3" />
+                          </Button>
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button size="sm" variant="outline" className="text-red-600" data-testid={`delete-permit-${p.id}-btn`}>
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete permit?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  This removes "{p.name}" from the compliance checklist. Drivers will no longer see it.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => deletePermit(p.id)} data-testid={`confirm-delete-permit-${p.id}-btn`}>Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="ledger">
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader><CardTitle className="font-archivo">Commission & Cancellation Ledger ({ledger.length})</CardTitle></CardHeader>
@@ -534,6 +647,93 @@ const AdminDashboardPage = () => {
           <DialogFooter>
             <Button variant="outline" onClick={() => setEditJob(null)}>Cancel</Button>
             <Button onClick={saveJob} className="bg-blue-600 hover:bg-blue-700" data-testid="save-job-btn">Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Edit Permit Dialog */}
+      <Dialog open={!!editPermit} onOpenChange={(o) => !o && setEditPermit(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Edit Permit</DialogTitle></DialogHeader>
+          {editPermit && (
+            <div className="space-y-3">
+              <div><Label>ID</Label><Input value={editPermit.id} disabled /></div>
+              <div><Label>Name</Label>
+                <Input value={editPermit.name}
+                  onChange={e => setEditPermit({ ...editPermit, name: e.target.value })}
+                  data-testid="edit-permit-name-input" />
+              </div>
+              <div><Label>Description</Label>
+                <Textarea value={editPermit.description}
+                  onChange={e => setEditPermit({ ...editPermit, description: e.target.value })} />
+              </div>
+              <div><Label>Issuing Authority</Label>
+                <Input value={editPermit.issuing_authority}
+                  onChange={e => setEditPermit({ ...editPermit, issuing_authority: e.target.value })} />
+              </div>
+              <div><Label>URL</Label>
+                <Input value={editPermit.url}
+                  onChange={e => setEditPermit({ ...editPermit, url: e.target.value })} />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="perm-required"
+                  checked={!!editPermit.required}
+                  onChange={e => setEditPermit({ ...editPermit, required: e.target.checked })}
+                  data-testid="edit-permit-required-checkbox" />
+                <Label htmlFor="perm-required" className="cursor-pointer">Required for drivers</Label>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditPermit(null)}>Cancel</Button>
+            <Button onClick={savePermit} className="bg-blue-600 hover:bg-blue-700" data-testid="save-permit-btn">Save</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* New Permit Dialog */}
+      <Dialog open={!!newPermit} onOpenChange={(o) => !o && setNewPermit(null)}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader><DialogTitle>Add Permit Requirement</DialogTitle></DialogHeader>
+          {newPermit && (
+            <div className="space-y-3">
+              <div><Label>ID (lowercase, no spaces)</Label>
+                <Input value={newPermit.id}
+                  onChange={e => setNewPermit({ ...newPermit, id: e.target.value.toLowerCase().replace(/\s+/g, '_') })}
+                  placeholder="e.g. hazmat_cert"
+                  data-testid="new-permit-id-input" />
+              </div>
+              <div><Label>Name</Label>
+                <Input value={newPermit.name}
+                  onChange={e => setNewPermit({ ...newPermit, name: e.target.value })}
+                  data-testid="new-permit-name-input" />
+              </div>
+              <div><Label>Description</Label>
+                <Textarea value={newPermit.description}
+                  onChange={e => setNewPermit({ ...newPermit, description: e.target.value })} />
+              </div>
+              <div><Label>Issuing Authority</Label>
+                <Input value={newPermit.issuing_authority}
+                  onChange={e => setNewPermit({ ...newPermit, issuing_authority: e.target.value })} />
+              </div>
+              <div><Label>URL</Label>
+                <Input value={newPermit.url}
+                  onChange={e => setNewPermit({ ...newPermit, url: e.target.value })}
+                  placeholder="https://..." />
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="checkbox" id="new-perm-required"
+                  checked={!!newPermit.required}
+                  onChange={e => setNewPermit({ ...newPermit, required: e.target.checked })} />
+                <Label htmlFor="new-perm-required" className="cursor-pointer">Required for drivers</Label>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setNewPermit(null)}>Cancel</Button>
+            <Button onClick={createPermit}
+              disabled={!newPermit?.id || !newPermit?.name}
+              className="bg-blue-600 hover:bg-blue-700"
+              data-testid="create-permit-btn">Create</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

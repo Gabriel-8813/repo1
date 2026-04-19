@@ -1,0 +1,46 @@
+{
+  "summary": "Frontend-only Playwright verification of iteration_4 features (Admin Permits CRUD tab + Urgent Jobs live alerts). 10/10 scripted flows passed. Admin permits show the 6 seeded Ontario requirements; create/edit/delete work with proper toasts; public /permits shows user-added permits; driver RBAC blocks /admin and redirects to /dashboard. Urgent jobs polling (15s) fires sonner toast AND renders red Card [data-testid='urgent-jobs-alert'] within ~10s after admin POSTs an emergency job; Dismiss and View All buttons function correctly. All QA-created permits and jobs were cleaned up via API.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin Permits dialog (Add & Edit)", "issues": ["React warning: 'Missing Description or aria-describedby={undefined} for {DialogContent}' on both New Permit and Edit Permit dialogs. Cosmetic a11y warning only — consider adding <DialogDescription> to silence."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_permits_and_fix.py",
+    "/app/test_reports/pytest/commission_results.xml"
+  ],
+  "action_items": [
+    "(Optional/low) Silence Radix Dialog a11y warning by adding a <DialogDescription> (or aria-describedby) to the Add Permit and Edit Permit DialogContents in /app/frontend/src/pages/AdminDashboardPage.js.",
+    "(Informational, not blocking) Permits table in Admin does not render the 'description' column — edit-description changes are not visually confirmable from the table row (verified via toast only). Consider surfacing description in a tooltip or extra column."
+  ],
+  "critical_code_review_comments": [
+    "useUrgentJobAlerts first-poll seed works as documented: the initial /api/jobs fetch seeds the seen-set without firing a toast, so the test correctly waited ~6s before creating the job. This behavior should be preserved.",
+    "DashboardPage.js correctly uses data-testid='urgent-jobs-alert', 'dismiss-urgent-btn', 'view-urgent-btn' per spec. No blocking issues.",
+    "AdminDashboardPage.js: Add/Edit permit dialogs use Textarea for description with no data-testid — added selectors by fallback worked, but giving the description textarea a stable testid would harden tests."
+  ],
+  "updated_files": [],
+  "success_rate": {"backend": "n/a (not retested this iteration)", "frontend": "100% (10/10 flows passed)"},
+  "test_credentials": "Admin: gabrielosmanhamza@yahoo.com / Admin@123 ✅ | Driver: driver1@test.com / Driver@123 ✅",
+  "seed_data_creation": "Created transient 'test_qa_permit' (deleted at end of test) and two emergency jobs 'QA EMERGENCY BLOOD <ts>' + 'QA EMERGENCY 2 <ts>' (both DELETEd via /api/admin/jobs/{id} at end). Environment left clean.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Admin permits tab, urgent-jobs polling, sonner toast integration, and driver RBAC are fully verified. Two browser contexts were used for the live-alert test: driver kept dashboard open, admin POSTed jobs via page.request (REST). Poll cadence observed at ~10s to show in UI after POST (interval is 15s but first probe hits within window). JobCreate schema requires: title, pickup_address, delivery_address, pickup_city, delivery_city, goods_type, estimated_distance_km, offered_price, urgency — reference /app/backend/server.py L153-164. Admin login returns 'access_token' (not 'token').",
+  "flows_verified": [
+    "Admin /admin → Permits tab shows 6 rows: cvor, tdg, driver_license, vulnerable_sector, vehicle_insurance, first_aid",
+    "Add Permit dialog → Create → toast 'Permit created' + new permit-row-test_qa_permit appears",
+    "Edit Permit dialog → Save → toast 'Permit updated'",
+    "Public /permits (as driver1) shows newly-added 'QA Test' permit",
+    "Delete Permit via trash icon → AlertDialog confirm → toast 'Permit deleted' + row removed",
+    "Driver navigating to /admin is redirected to /dashboard (AdminRoute RBAC)",
+    "Emergency job POSTed by admin → sonner toast '🚨 EMERGENCY: <title>' appears on driver dashboard within ~10s",
+    "Red Card data-testid='urgent-jobs-alert' lists the emergency job title/route/price",
+    "Dismiss (data-testid='dismiss-urgent-btn') removes the banner immediately",
+    "View All (data-testid='view-urgent-btn') navigates driver to /jobs"
+  ]
+}

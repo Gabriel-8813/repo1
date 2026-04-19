@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useUrgentJobAlerts } from '../hooks/useUrgentJobAlerts';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
@@ -29,9 +30,18 @@ const JobsPage = () => {
   const [activeTab, setActiveTab] = useState('available');
   const [nowTick, setNowTick] = useState(Date.now());
 
+  // Live alerts for newly posted urgent/emergency jobs (toasts + auto-refresh)
+  const { newlyArrived } = useUrgentJobAlerts(token, true);
+
   useEffect(() => {
     fetchJobs();
   }, [token]);
+
+  // Auto-refresh list when a new urgent job arrives
+  useEffect(() => {
+    if (newlyArrived.length > 0) fetchJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [newlyArrived.length]);
 
   // Tick every 10s to refresh cancel-grace countdowns
   useEffect(() => {
