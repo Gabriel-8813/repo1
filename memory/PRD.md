@@ -79,6 +79,13 @@ Build an app for medical transportation that people can register and pay a month
 - **Revenue model**: 100% of tip → driver earnings (no platform commission on tips). Credited to `earnings` collection with `type='tip'` on Stripe paid confirmation. Idempotent via `payment_session_id` check.
 - **Frontend**: New public `/tip/:jobId` page with 15/20/25% presets + custom, optional tipper name, Stripe Checkout redirect, thank-you screen on success. JobsPage adds "Share Tip Link" button on completed jobs (copies URL). Dashboard has new "Tips Received" stat card; grid expanded to 5 cols on xl.
 - **Tested**: 13/13 backend pytest + 16/17 frontend Playwright — zero issues.
+
+### Stripe Connect — Express Accounts (Feb 19 2026)
+- **Backend**: Installed official `stripe==14.3.0` SDK alongside emergent integrations. `STRIPE_API_KEY` now set to the creator's platform test key so all Stripe calls (Checkout + Connect) route to their account.
+- **New endpoints**: `POST /api/driver/connect/onboard` (creates CA Express account on first call, reuses thereafter, returns Stripe-hosted onboarding URL), `GET /api/driver/connect/status` (syncs charges_enabled/payouts_enabled/requirements from Stripe into user doc), `POST /api/driver/connect/login-link` (one-time link to Stripe Express dashboard).
+- **Tip routing**: `POST /api/tips/checkout` now uses Stripe **destination charges** (`transfer_data.destination`) when the driver has `stripe_charges_enabled=true`. Response includes `routed_to_driver:true`, `stripe_account_id`. Fallback to emergent Checkout when driver is not yet onboarded.
+- **Frontend**: New "Stripe Payouts" card on `/billing` with three states — Not Connected (blue "Connect Stripe" CTA) / Onboarding Incomplete (amber "Finish Onboarding") / Active (green badge + "Stripe Dashboard" button that opens one-time login link). Return-URL handler toasts success when driver comes back from Stripe.
+- **Tested**: 16/16 backend pytest + 3/3 frontend UI states — zero issues.
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
