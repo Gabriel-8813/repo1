@@ -603,10 +603,10 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("accepted_by") != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the assigned driver can cancel this job")
     if job.get("status") != "in_progress":
         raise HTTPException(status_code=400, detail="Only in-progress jobs can be cancelled")
+    if job.get("accepted_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can cancel this job")
     
     fees = await get_fees_from_db()
     grace_min = fees.get("cancellation_grace_minutes", 5)
