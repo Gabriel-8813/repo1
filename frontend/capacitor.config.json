@@ -1,0 +1,12 @@
+{
+  "appId": "ca.meditrans.app",
+  "appName": "MediTrans",
+  "webDir": "build",
+  "ios": {
+    "contentInset": "always",
+    "limitsNavigationsToAppBoundDomains": false
+  },
+  "android": {
+    "allowMixedContent": false
+  }
+}
