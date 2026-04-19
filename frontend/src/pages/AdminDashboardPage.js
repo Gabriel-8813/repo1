@@ -23,7 +23,7 @@ import {
 import {
   Shield, Truck, Users, Briefcase, DollarSign, Settings, LogOut,
   Trash2, Pencil, TrendingUp, AlertCircle, Crown, Percent, Receipt,
-  FileText, Plus
+  FileText, Plus, Star, EyeOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -39,6 +39,7 @@ const AdminDashboardPage = () => {
   const [ledger, setLedger] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [permits, setPermits] = useState([]);
+  const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [editUser, setEditUser] = useState(null);
@@ -60,7 +61,7 @@ const AdminDashboardPage = () => {
 
   const fetchAll = async () => {
     try {
-      const [s, u, j, f, l, t, p] = await Promise.all([
+      const [s, u, j, f, l, t, p, r] = await Promise.all([
         axios.get(`${API}/admin/stats`, { headers }),
         axios.get(`${API}/admin/users`, { headers }),
         axios.get(`${API}/admin/jobs`, { headers }),
@@ -68,6 +69,7 @@ const AdminDashboardPage = () => {
         axios.get(`${API}/admin/ledger`, { headers }),
         axios.get(`${API}/admin/transactions`, { headers }),
         axios.get(`${API}/admin/permits`, { headers }),
+        axios.get(`${API}/admin/reviews`, { headers }),
       ]);
       setStats(s.data);
       setUsers(u.data.users);
@@ -77,6 +79,7 @@ const AdminDashboardPage = () => {
       setLedger(l.data.entries);
       setTransactions(t.data.transactions);
       setPermits(p.data.permits);
+      setReviews(r.data.reviews);
     } catch (e) {
       toast.error('Failed to load admin data');
       console.error(e);
@@ -194,6 +197,26 @@ const AdminDashboardPage = () => {
     }
   };
 
+  const hideReview = async (id) => {
+    try {
+      await axios.post(`${API}/admin/reviews/${id}/hide`, {}, { headers });
+      toast.success('Review hidden from public');
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Hide failed');
+    }
+  };
+
+  const deleteReview = async (id) => {
+    try {
+      await axios.delete(`${API}/admin/reviews/${id}`, { headers });
+      toast.success('Review deleted');
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Delete failed');
+    }
+  };
+
   if (loading || !stats) {
     return (
       <div className="min-h-screen bg-slate-50 flex items-center justify-center">
@@ -254,6 +277,7 @@ const AdminDashboardPage = () => {
             <TabsTrigger value="jobs" data-testid="tab-jobs"><Briefcase className="w-4 h-4 mr-2" />Jobs</TabsTrigger>
             <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees & Commission</TabsTrigger>
             <TabsTrigger value="permits" data-testid="tab-permits"><FileText className="w-4 h-4 mr-2" />Permits</TabsTrigger>
+            <TabsTrigger value="reviews" data-testid="tab-reviews"><Star className="w-4 h-4 mr-2" />Reviews</TabsTrigger>
             <TabsTrigger value="ledger" data-testid="tab-ledger"><Receipt className="w-4 h-4 mr-2" />Ledger</TabsTrigger>
             <TabsTrigger value="tx" data-testid="tab-tx"><DollarSign className="w-4 h-4 mr-2" />Transactions</TabsTrigger>
           </TabsList>
@@ -479,6 +503,78 @@ const AdminDashboardPage = () => {
                               <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
                                 <AlertDialogAction onClick={() => deletePermit(p.id)} data-testid={`confirm-delete-permit-${p.id}-btn`}>Delete</AlertDialogAction>
+                              </AlertDialogFooter>
+                            </AlertDialogContent>
+                          </AlertDialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
+          <TabsContent value="reviews">
+            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+              <CardHeader><CardTitle className="font-archivo">Driver Reviews ({reviews.length})</CardTitle></CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Rating</TableHead>
+                      <TableHead>Reviewer</TableHead>
+                      <TableHead>Comment</TableHead>
+                      <TableHead>Driver</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Date</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {reviews.length === 0 ? (
+                      <TableRow><TableCell colSpan={7} className="text-center py-8 text-slate-400">No reviews yet</TableCell></TableRow>
+                    ) : reviews.map(r => (
+                      <TableRow key={r.id} data-testid={`review-row-${r.id}`}>
+                        <TableCell>
+                          <div className="flex items-center gap-0.5 text-amber-400">
+                            {[...Array(r.rating)].map((_, i) => <Star key={i} className="w-3 h-3 fill-current" />)}
+                            {[...Array(5 - r.rating)].map((_, i) => <Star key={'o'+i} className="w-3 h-3 text-slate-200 fill-current" />)}
+                          </div>
+                        </TableCell>
+                        <TableCell className="text-sm">{r.reviewer_name || <span className="text-slate-400">Anonymous</span>}</TableCell>
+                        <TableCell className="max-w-xs">
+                          <p className="text-sm text-slate-700 truncate">{r.comment || <span className="text-slate-400">—</span>}</p>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{r.driver_id?.slice(0, 8)}...</TableCell>
+                        <TableCell>
+                          <Badge className={r.hidden ? 'bg-slate-200 text-slate-600' : 'bg-emerald-100 text-emerald-700'}>
+                            {r.hidden ? 'Hidden' : 'Public'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-500">{new Date(r.created_at).toLocaleString()}</TableCell>
+                        <TableCell className="text-right space-x-2">
+                          {!r.hidden && (
+                            <Button size="sm" variant="outline" onClick={() => hideReview(r.id)} data-testid={`hide-review-${r.id}-btn`}>
+                              <EyeOff className="w-3 h-3" />
+                            </Button>
+                          )}
+                          <AlertDialog>
+                            <AlertDialogTrigger asChild>
+                              <Button size="sm" variant="outline" className="text-red-600" data-testid={`delete-review-${r.id}-btn`}>
+                                <Trash2 className="w-3 h-3" />
+                              </Button>
+                            </AlertDialogTrigger>
+                            <AlertDialogContent>
+                              <AlertDialogHeader>
+                                <AlertDialogTitle>Delete review?</AlertDialogTitle>
+                                <AlertDialogDescription>
+                                  Permanently deletes this review. Consider hiding instead to preserve history.
+                                </AlertDialogDescription>
+                              </AlertDialogHeader>
+                              <AlertDialogFooter>
+                                <AlertDialogCancel>Cancel</AlertDialogCancel>
+                                <AlertDialogAction onClick={() => deleteReview(r.id)} data-testid={`confirm-delete-review-${r.id}-btn`}>Delete</AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>

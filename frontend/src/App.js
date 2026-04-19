@@ -14,6 +14,7 @@ import PermitsPage from "./pages/PermitsPage";
 import BillingPage from "./pages/BillingPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import TipPage from "./pages/TipPage";
+import RatePage from "./pages/RatePage";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -77,6 +78,7 @@ function AppRoutes() {
       {/* Public Routes */}
       <Route path="/" element={<LandingPage />} />
       <Route path="/tip/:jobId" element={<TipPage />} />
+      <Route path="/rate/:jobId" element={<RatePage />} />
       <Route 
         path="/login" 
         element={

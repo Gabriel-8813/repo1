@@ -248,6 +248,11 @@ class PermitUpdate(BaseModel):
     url: Optional[str] = None
     required: Optional[bool] = None
 
+class ReviewCreate(BaseModel):
+    rating: int = Field(ge=1, le=5)
+    comment: Optional[str] = None
+    reviewer_name: Optional[str] = None
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -756,6 +761,98 @@ async def get_driver_tips(current_user: dict = Depends(get_current_user)):
     return {"tips": tips, "total": total, "count": len(tips), "currency": "CAD"}
 
 # ======================
+# Driver Ratings & Reviews
+# ======================
+async def _compute_driver_rating(driver_id: str) -> dict:
+    reviews = await db.reviews.find(
+        {"driver_id": driver_id, "hidden": {"$ne": True}}, {"_id": 0}
+    ).to_list(10000)
+    count = len(reviews)
+    if count == 0:
+        return {"avg": 0.0, "count": 0}
+    avg = sum(r["rating"] for r in reviews) / count
+    return {"avg": round(avg, 2), "count": count}
+
+@api_router.get("/reviews/info/{job_id}")
+async def get_review_info(job_id: str):
+    """Public — checks if a trip can still be reviewed."""
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Only completed trips can be reviewed")
+    driver = await db.users.find_one({"id": job.get("accepted_by")}, {"_id": 0, "password_hash": 0})
+    existing = await db.reviews.find_one({"job_id": job_id}, {"_id": 0})
+    rating_summary = await _compute_driver_rating(job.get("accepted_by"))
+    return {
+        "trip": {
+            "id": job["id"],
+            "title": job["title"],
+            "pickup_city": job["pickup_city"],
+            "delivery_city": job["delivery_city"]
+        },
+        "driver": {
+            "full_name": driver["full_name"] if driver else "Driver",
+            "first_name": (driver["full_name"].split(" ")[0] if driver else "Driver")
+        },
+        "already_reviewed": existing is not None,
+        "driver_rating": rating_summary
+    }
+
+@api_router.post("/reviews/{job_id}")
+async def submit_review(job_id: str, review: ReviewCreate):
+    """Public — customer submits a 1-5 rating + optional comment for a completed trip."""
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Trip not found")
+    if job.get("status") != "completed":
+        raise HTTPException(status_code=400, detail="Only completed trips can be reviewed")
+    driver_id = job.get("accepted_by")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="No driver on this trip")
+    # One review per job
+    if await db.reviews.find_one({"job_id": job_id}):
+        raise HTTPException(status_code=400, detail="This trip has already been reviewed")
+
+    comment = (review.comment or "").strip()[:2000] or None
+    reviewer_name = (review.reviewer_name or "").strip()[:80] or None
+
+    doc = {
+        "id": str(uuid.uuid4()),
+        "job_id": job_id,
+        "driver_id": driver_id,
+        "rating": int(review.rating),
+        "comment": comment,
+        "reviewer_name": reviewer_name,
+        "hidden": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.reviews.insert_one(doc)
+    doc.pop("_id", None)
+    return {"review": doc, "driver_rating": await _compute_driver_rating(driver_id)}
+
+@api_router.get("/drivers/{driver_id}/reviews")
+async def public_driver_reviews(driver_id: str):
+    """Public — list of visible reviews + summary for a driver."""
+    reviews = await db.reviews.find(
+        {"driver_id": driver_id, "hidden": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(200)
+    return {
+        "reviews": reviews,
+        "summary": await _compute_driver_rating(driver_id)
+    }
+
+@api_router.get("/driver/reviews")
+async def get_my_reviews(current_user: dict = Depends(get_current_user)):
+    reviews = await db.reviews.find(
+        {"driver_id": current_user["id"], "hidden": {"$ne": True}}, {"_id": 0}
+    ).sort("created_at", -1).to_list(500)
+    return {
+        "reviews": reviews,
+        "summary": await _compute_driver_rating(current_user["id"])
+    }
+
+# ======================
 # Stripe Connect (Express) — driver payouts
 # ======================
 class ConnectOnboardRequest(BaseModel):
@@ -1178,6 +1275,26 @@ async def admin_list_transactions(admin: dict = Depends(require_admin)):
     return {"transactions": tx}
 
 # Admin: Permit requirement management
+@api_router.get("/admin/reviews")
+async def admin_list_reviews(admin: dict = Depends(require_admin)):
+    reviews = await db.reviews.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return {"reviews": reviews}
+
+@api_router.delete("/admin/reviews/{review_id}")
+async def admin_delete_review(review_id: str, admin: dict = Depends(require_admin)):
+    result = await db.reviews.delete_one({"id": review_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"status": "deleted", "review_id": review_id}
+
+@api_router.post("/admin/reviews/{review_id}/hide")
+async def admin_hide_review(review_id: str, admin: dict = Depends(require_admin)):
+    """Soft-hide a review instead of deleting — preserves history."""
+    result = await db.reviews.update_one({"id": review_id}, {"$set": {"hidden": True}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Review not found")
+    return {"status": "hidden", "review_id": review_id}
+
 @api_router.get("/admin/permits")
 async def admin_list_permits(admin: dict = Depends(require_admin)):
     permits = await db.permits.find({}, {"_id": 0}).sort("order", 1).to_list(1000)

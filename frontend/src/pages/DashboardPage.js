@@ -26,6 +26,7 @@ const DashboardPage = () => {
   const [requiredPermits, setRequiredPermits] = useState([]);
   const [balance, setBalance] = useState({ owed: 0, paid: 0, entries: [] });
   const [tips, setTips] = useState({ total: 0, count: 0 });
+  const [rating, setRating] = useState({ avg: 0, count: 0 });
   const [loading, setLoading] = useState(true);
 
   // Real-time polling for urgent/emergency jobs — fires toast when new ones appear
@@ -44,14 +45,15 @@ const DashboardPage = () => {
   const fetchData = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes, balanceRes, tipsRes] = await Promise.all([
+      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes, balanceRes, tipsRes, reviewsRes] = await Promise.all([
         axios.get(`${API}/earnings/stats`, { headers }),
         axios.get(`${API}/jobs/available`, { headers }),
         axios.get(`${API}/jobs/my`, { headers }),
         axios.get(`${API}/driver/permits`, { headers }),
         axios.get(`${API}/permits`, { headers }),
         axios.get(`${API}/driver/balance`, { headers }),
-        axios.get(`${API}/driver/tips`, { headers })
+        axios.get(`${API}/driver/tips`, { headers }),
+        axios.get(`${API}/driver/reviews`, { headers })
       ]);
       
       setStats(statsRes.data);
@@ -61,6 +63,7 @@ const DashboardPage = () => {
       setRequiredPermits(allPermitsRes.data.permits.filter(p => p.required));
       setBalance(balanceRes.data);
       setTips(tipsRes.data);
+      setRating(reviewsRes.data.summary);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -207,7 +210,7 @@ const DashboardPage = () => {
         )}
 
         {/* Stats Grid */}
-        <div className="grid md:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
+        <div className="grid md:grid-cols-3 xl:grid-cols-6 gap-6 mb-8">
           <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
@@ -262,6 +265,25 @@ const DashboardPage = () => {
                 ${tips.total.toFixed(2)}
               </p>
               <p className="text-xs text-slate-400 mt-1">{tips.count} tip{tips.count === 1 ? '' : 's'} · 100% yours</p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]" data-testid="dashboard-rating-card">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 bg-amber-100 rounded-xl flex items-center justify-center">
+                  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-6 h-6 text-amber-500">
+                    <path d="M12 .587l3.668 7.568L24 9.75l-6 5.848L19.335 24 12 20.013 4.665 24 6 15.598 0 9.75l8.332-1.595z"/>
+                  </svg>
+                </div>
+              </div>
+              <p className="text-sm text-slate-500 mb-1">Your Rating</p>
+              <p className="font-archivo font-black text-3xl text-slate-900" data-testid="dashboard-rating-avg">
+                {rating.count === 0 ? '—' : rating.avg.toFixed(1)}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">
+                {rating.count === 0 ? 'No reviews yet' : `${rating.count} review${rating.count === 1 ? '' : 's'}`}
+              </p>
             </CardContent>
           </Card>
 
