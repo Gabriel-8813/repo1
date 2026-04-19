@@ -123,6 +123,10 @@ class UserLogin(BaseModel):
     email: EmailStr
     password: str
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str
+
 class UserResponse(BaseModel):
     id: str
     email: str
@@ -361,6 +365,20 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         role=current_user["role"],
         created_at=current_user["created_at"]
     )
+
+@api_router.post("/auth/change-password")
+async def change_password(payload: PasswordChange, current_user: dict = Depends(get_current_user)):
+    if not verify_password(payload.current_password, current_user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Current password is incorrect")
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    if payload.new_password == payload.current_password:
+        raise HTTPException(status_code=400, detail="New password must be different from current")
+    await db.users.update_one(
+        {"id": current_user["id"]},
+        {"$set": {"password_hash": hash_password(payload.new_password)}}
+    )
+    return {"status": "ok", "message": "Password updated"}
 
 # Driver Profile Routes
 @api_router.get("/driver/profile")

@@ -3,6 +3,7 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
+import ChangePasswordDialog from '../components/ChangePasswordDialog';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -248,6 +249,7 @@ const AdminDashboardPage = () => {
             <Badge className="bg-purple-100 text-purple-700 gap-1" data-testid="admin-badge">
               <Crown className="w-3 h-3" /> Admin
             </Badge>
+            <ChangePasswordDialog token={token} />
             <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="admin-logout-btn">
               <LogOut className="w-4 h-4 mr-2" /> Logout
             </Button>
