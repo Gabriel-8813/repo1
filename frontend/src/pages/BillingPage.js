@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge';
 import {
   Truck, CreditCard, CheckCircle, DollarSign, LogOut,
-  Percent, AlertTriangle, Receipt, Clock, FileText
+  Percent, AlertTriangle, Receipt, Clock, FileText, ExternalLink, Zap
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -20,6 +20,8 @@ const BillingPage = () => {
   const [balance, setBalance] = useState({ owed: 0, paid: 0, entries: [], currency: 'CAD' });
   const [fees, setFees] = useState(null);
   const [transactions, setTransactions] = useState([]);
+  const [connect, setConnect] = useState(null);
+  const [connectingStripe, setConnectingStripe] = useState(false);
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
   const [checkingPayment, setCheckingPayment] = useState(false);
@@ -33,14 +35,16 @@ const BillingPage = () => {
   const fetchData = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [b, f, t] = await Promise.all([
+      const [b, f, t, c] = await Promise.all([
         axios.get(`${API}/driver/balance`, { headers }),
         axios.get(`${API}/fees/agreement`),
-        axios.get(`${API}/payments/history`, { headers })
+        axios.get(`${API}/payments/history`, { headers }),
+        axios.get(`${API}/driver/connect/status`, { headers })
       ]);
       setBalance(b.data);
       setFees(f.data.agreement);
       setTransactions(t.data.transactions);
+      setConnect(c.data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -48,7 +52,50 @@ const BillingPage = () => {
     }
   };
 
+  const startConnectOnboarding = async () => {
+    setConnectingStripe(true);
+    try {
+      const r = await axios.post(
+        `${API}/driver/connect/onboard`,
+        { origin_url: window.location.origin },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      window.location.href = r.data.url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not start Stripe onboarding');
+      setConnectingStripe(false);
+    }
+  };
+
+  const openStripeDashboard = async () => {
+    try {
+      const r = await axios.post(
+        `${API}/driver/connect/login-link`,
+        {},
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      window.open(r.data.url, '_blank', 'noopener,noreferrer');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not open Stripe dashboard');
+    }
+  };
+
   const checkPaymentStatus = async () => {
+    // Stripe Connect return: user just came back from Stripe-hosted onboarding
+    if (searchParams.get('stripe_return') === '1') {
+      toast.success('Stripe onboarding complete — refreshing status...');
+      setTimeout(() => {
+        navigate('/billing', { replace: true });
+        fetchData();
+      }, 500);
+      return;
+    }
+    if (searchParams.get('stripe_refresh') === '1') {
+      toast.info('Stripe session expired — please try onboarding again');
+      navigate('/billing', { replace: true });
+      return;
+    }
+
     const sessionId = searchParams.get('session_id');
     if (!sessionId) return;
     setCheckingPayment(true);
@@ -157,6 +204,77 @@ const BillingPage = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* Stripe Connect Status */}
+        <Card className={`mb-8 border-2 ${
+          connect?.charges_enabled ? 'border-emerald-200 bg-emerald-50' :
+          connect?.connected ? 'border-amber-200 bg-amber-50' :
+          'border-blue-200 bg-blue-50'
+        }`} data-testid="stripe-connect-card">
+          <CardContent className="p-6">
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex items-start gap-4">
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                  connect?.charges_enabled ? 'bg-emerald-100' :
+                  connect?.connected ? 'bg-amber-100' : 'bg-blue-100'
+                }`}>
+                  <Zap className={`w-6 h-6 ${
+                    connect?.charges_enabled ? 'text-emerald-600' :
+                    connect?.connected ? 'text-amber-600' : 'text-blue-600'
+                  }`} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    <h2 className="font-archivo font-bold text-lg text-slate-900">Stripe Payouts</h2>
+                    {connect?.charges_enabled ? (
+                      <Badge className="bg-emerald-100 text-emerald-700" data-testid="stripe-status-active">
+                        <CheckCircle className="w-3 h-3 mr-1" /> Active
+                      </Badge>
+                    ) : connect?.connected ? (
+                      <Badge className="bg-amber-100 text-amber-700" data-testid="stripe-status-pending">
+                        <Clock className="w-3 h-3 mr-1" /> Onboarding Incomplete
+                      </Badge>
+                    ) : (
+                      <Badge className="bg-slate-100 text-slate-700" data-testid="stripe-status-none">
+                        Not Connected
+                      </Badge>
+                    )}
+                  </div>
+                  <p className="text-sm text-slate-600 max-w-lg">
+                    {connect?.charges_enabled
+                      ? 'Tips are paid directly to your Stripe account. Funds arrive in your bank on Stripe\'s schedule.'
+                      : connect?.connected
+                        ? 'You\'ve started Stripe onboarding but it isn\'t complete yet. Customer tips will go to the platform until you finish.'
+                        : 'Connect your Stripe account in ~2 minutes to receive tips directly from customers — 100% yours, no commission.'}
+                  </p>
+                </div>
+              </div>
+              <div className="flex gap-2">
+                {connect?.charges_enabled ? (
+                  <Button
+                    variant="outline"
+                    onClick={openStripeDashboard}
+                    className="rounded-full"
+                    data-testid="stripe-dashboard-btn"
+                  >
+                    <ExternalLink className="w-4 h-4 mr-2" /> Stripe Dashboard
+                  </Button>
+                ) : (
+                  <Button
+                    onClick={startConnectOnboarding}
+                    disabled={connectingStripe}
+                    className="bg-blue-600 hover:bg-blue-700 rounded-full"
+                    data-testid="stripe-connect-btn"
+                  >
+                    <Zap className="w-4 h-4 mr-2" />
+                    {connectingStripe ? 'Opening Stripe...' :
+                      connect?.connected ? 'Finish Onboarding' : 'Connect Stripe'}
+                  </Button>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Current Balance */}
         <Card className={`mb-8 border-2 ${balance.owed > 0 ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
