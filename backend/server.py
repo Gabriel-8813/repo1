@@ -32,34 +32,24 @@ STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 # Admin Config
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').lower().strip()
 
-# Default Subscription Plans (seeded to DB on startup; admin can edit via /api/admin/plans)
-DEFAULT_SUBSCRIPTION_PLANS = {
-    "basic": {"name": "Basic", "price": 49.00, "features": ["Up to 20 jobs/month", "Basic support", "Standard job alerts"]},
-    "pro": {"name": "Pro", "price": 99.00, "features": ["Up to 50 jobs/month", "Priority support", "Advanced job matching", "Earnings analytics"]},
-    "premium": {"name": "Premium", "price": 149.00, "features": ["Unlimited jobs", "24/7 premium support", "First access to jobs", "Full analytics suite", "Priority badge"]}
-}
-
-# Default Fee Agreement
+# Default Fee Agreement (commission-based revenue model)
 DEFAULT_FEE_AGREEMENT = {
     "base_rate_per_km": 1.50,
     "minimum_fee": 25.00,
     "urgent_multiplier": 1.5,
     "emergency_multiplier": 2.0,
     "temperature_controlled_fee": 15.00,
-    "platform_commission": 0.15,
+    "commission_rate": 0.20,               # 20% platform commission on completed trips
+    "cancellation_fee": 15.00,             # charged if driver cancels after grace window
+    "cancellation_grace_minutes": 5,       # minutes after accept during which cancel is free
     "currency": "CAD"
 }
-
-async def get_plans_from_db() -> dict:
-    doc = await db.settings.find_one({"key": "subscription_plans"}, {"_id": 0})
-    if doc and doc.get("value"):
-        return doc["value"]
-    return DEFAULT_SUBSCRIPTION_PLANS
 
 async def get_fees_from_db() -> dict:
     doc = await db.settings.find_one({"key": "fee_agreement"}, {"_id": 0})
     if doc and doc.get("value"):
-        return doc["value"]
+        # Merge with defaults to keep forward-compat
+        return {**DEFAULT_FEE_AGREEMENT, **doc["value"]}
     return DEFAULT_FEE_AGREEMENT
 
 # Ontario Permit Requirements
@@ -137,9 +127,6 @@ class UserResponse(BaseModel):
     full_name: str
     phone: str
     role: str
-    subscription_plan: Optional[str] = None
-    subscription_status: Optional[str] = None
-    subscription_expires: Optional[str] = None
     created_at: str
 
 class TokenResponse(BaseModel):
@@ -202,10 +189,11 @@ class FeeAgreement(BaseModel):
     urgent_multiplier: float = 1.5
     emergency_multiplier: float = 2.0
     temperature_controlled_fee: float = 15.00
-    platform_commission: float = 0.15  # 15%
+    commission_rate: float = 0.20
+    cancellation_fee: float = 15.00
+    cancellation_grace_minutes: int = 5
 
 class CheckoutRequest(BaseModel):
-    plan_id: str
     origin_url: str
 
 class PaymentTransaction(BaseModel):
@@ -225,13 +213,6 @@ class AdminUserUpdate(BaseModel):
     full_name: Optional[str] = None
     phone: Optional[str] = None
     role: Optional[str] = None  # "admin" or "driver"
-    subscription_plan: Optional[str] = None
-    subscription_status: Optional[str] = None
-
-class PlanUpdate(BaseModel):
-    name: Optional[str] = None
-    price: Optional[float] = None
-    features: Optional[List[str]] = None
 
 class FeeAgreementUpdate(BaseModel):
     base_rate_per_km: Optional[float] = None
@@ -239,7 +220,9 @@ class FeeAgreementUpdate(BaseModel):
     urgent_multiplier: Optional[float] = None
     emergency_multiplier: Optional[float] = None
     temperature_controlled_fee: Optional[float] = None
-    platform_commission: Optional[float] = None
+    commission_rate: Optional[float] = None
+    cancellation_fee: Optional[float] = None
+    cancellation_grace_minutes: Optional[int] = None
 
 class JobAdminUpdate(BaseModel):
     title: Optional[str] = None
@@ -302,9 +285,6 @@ async def register(user_data: UserCreate):
         "full_name": user_data.full_name,
         "phone": user_data.phone,
         "role": role,
-        "subscription_plan": None,
-        "subscription_status": None,
-        "subscription_expires": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "driver_profile": None
     }
@@ -321,9 +301,6 @@ async def register(user_data: UserCreate):
             full_name=user_data.full_name,
             phone=user_data.phone,
             role=role,
-            subscription_plan=None,
-            subscription_status=None,
-            subscription_expires=None,
             created_at=user_doc["created_at"]
         )
     )
@@ -348,9 +325,6 @@ async def login(credentials: UserLogin):
             full_name=user["full_name"],
             phone=user["phone"],
             role=user["role"],
-            subscription_plan=user.get("subscription_plan"),
-            subscription_status=user.get("subscription_status"),
-            subscription_expires=user.get("subscription_expires"),
             created_at=user["created_at"]
         )
     )
@@ -363,9 +337,6 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         full_name=current_user["full_name"],
         phone=current_user["phone"],
         role=current_user["role"],
-        subscription_plan=current_user.get("subscription_plan"),
-        subscription_status=current_user.get("subscription_status"),
-        subscription_expires=current_user.get("subscription_expires"),
         created_at=current_user["created_at"]
     )
 
@@ -416,49 +387,64 @@ async def update_driver_permit(permit_id: str, completed: bool, current_user: di
         )
     return {"permit_id": permit_id, "completed": completed}
 
-# Subscription & Payment Routes
-@api_router.get("/subscriptions/plans")
-async def get_subscription_plans():
-    plans = await get_plans_from_db()
-    return {"plans": plans}
+# ======================
+# Commission / Balance / Payment Routes
+# ======================
+@api_router.get("/driver/balance")
+async def get_driver_balance(current_user: dict = Depends(get_current_user)):
+    entries = await db.ledger.find(
+        {"driver_id": current_user["id"]}, {"_id": 0}
+    ).sort("created_at", -1).to_list(1000)
+    owed = sum(e.get("amount", 0) for e in entries if e.get("status") == "owed")
+    paid = sum(e.get("amount", 0) for e in entries if e.get("status") == "paid")
+    return {
+        "owed": round(owed, 2),
+        "paid": round(paid, 2),
+        "currency": "CAD",
+        "entries": entries
+    }
 
-@api_router.post("/payments/checkout")
-async def create_checkout_session(checkout_req: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
-    plans = await get_plans_from_db()
-    if checkout_req.plan_id not in plans:
-        raise HTTPException(status_code=400, detail="Invalid plan")
+@api_router.post("/payments/balance/checkout")
+async def create_balance_checkout(checkout_req: CheckoutRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    # Calculate owed balance (server-side, never trust client)
+    entries_cursor = db.ledger.find(
+        {"driver_id": current_user["id"], "status": "owed"}, {"_id": 0}
+    )
+    owed_entries = await entries_cursor.to_list(1000)
+    owed_total = round(sum(e.get("amount", 0) for e in owed_entries), 2)
+    if owed_total <= 0:
+        raise HTTPException(status_code=400, detail="No outstanding balance to pay")
     
-    plan = plans[checkout_req.plan_id]
+    owed_ids = [e["id"] for e in owed_entries]
     
     host_url = str(request.base_url).rstrip('/')
     webhook_url = f"{host_url}/api/webhook/stripe"
-    
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
     
     success_url = f"{checkout_req.origin_url}/billing?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{checkout_req.origin_url}/billing"
     
     checkout_request = CheckoutSessionRequest(
-        amount=plan["price"],
+        amount=owed_total,
         currency="cad",
         success_url=success_url,
         cancel_url=cancel_url,
         metadata={
             "user_id": current_user["id"],
-            "plan_id": checkout_req.plan_id,
-            "plan_name": plan["name"]
+            "payment_type": "balance",
+            "ledger_ids": ",".join(owed_ids)
         }
     )
     
     session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
     
-    # Create payment transaction record
     transaction_doc = {
         "id": str(uuid.uuid4()),
         "user_id": current_user["id"],
         "session_id": session.session_id,
-        "plan_id": checkout_req.plan_id,
-        "amount": plan["price"],
+        "payment_type": "balance",
+        "ledger_ids": owed_ids,
+        "amount": owed_total,
         "currency": "cad",
         "status": "pending",
         "payment_status": "initiated",
@@ -467,23 +453,35 @@ async def create_checkout_session(checkout_req: CheckoutRequest, request: Reques
     }
     await db.payment_transactions.insert_one(transaction_doc)
     
-    return {"checkout_url": session.url, "session_id": session.session_id}
+    return {"checkout_url": session.url, "session_id": session.session_id, "amount": owed_total}
+
+async def _settle_ledger_for_session(session_id: str):
+    """Mark ledger entries as paid once Stripe confirms payment."""
+    tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
+    if not tx or tx.get("payment_status") != "paid":
+        return
+    ledger_ids = tx.get("ledger_ids") or []
+    if ledger_ids:
+        await db.ledger.update_many(
+            {"id": {"$in": ledger_ids}, "status": "owed"},
+            {"$set": {
+                "status": "paid",
+                "paid_at": datetime.now(timezone.utc).isoformat(),
+                "payment_session_id": session_id
+            }}
+        )
 
 @api_router.get("/payments/status/{session_id}")
 async def get_payment_status(session_id: str, request: Request, current_user: dict = Depends(get_current_user)):
     host_url = str(request.base_url).rstrip('/')
     webhook_url = f"{host_url}/api/webhook/stripe"
-    
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
     
     try:
         status: CheckoutStatusResponse = await stripe_checkout.get_checkout_status(session_id)
+        tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
         
-        # Update transaction
-        transaction = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
-        
-        if transaction and transaction.get("payment_status") != "paid" and status.payment_status == "paid":
-            # Update transaction status
+        if tx and tx.get("payment_status") != "paid" and status.payment_status == "paid":
             await db.payment_transactions.update_one(
                 {"session_id": session_id},
                 {"$set": {
@@ -492,19 +490,7 @@ async def get_payment_status(session_id: str, request: Request, current_user: di
                     "updated_at": datetime.now(timezone.utc).isoformat()
                 }}
             )
-            
-            # Activate subscription
-            plan_id = transaction.get("plan_id")
-            expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-            
-            await db.users.update_one(
-                {"id": current_user["id"]},
-                {"$set": {
-                    "subscription_plan": plan_id,
-                    "subscription_status": "active",
-                    "subscription_expires": expires_at
-                }}
-            )
+            await _settle_ledger_for_session(session_id)
         
         return {
             "status": status.status,
@@ -519,21 +505,17 @@ async def get_payment_status(session_id: str, request: Request, current_user: di
 async def stripe_webhook(request: Request):
     body = await request.body()
     signature = request.headers.get("Stripe-Signature")
-    
     host_url = str(request.base_url).rstrip('/')
     webhook_url = f"{host_url}/api/webhook/stripe"
-    
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
     
     try:
         webhook_response = await stripe_checkout.handle_webhook(body, signature)
-        
         if webhook_response.payment_status == "paid":
-            transaction = await db.payment_transactions.find_one(
+            tx = await db.payment_transactions.find_one(
                 {"session_id": webhook_response.session_id}, {"_id": 0}
             )
-            
-            if transaction and transaction.get("payment_status") != "paid":
+            if tx and tx.get("payment_status") != "paid":
                 await db.payment_transactions.update_one(
                     {"session_id": webhook_response.session_id},
                     {"$set": {
@@ -542,21 +524,7 @@ async def stripe_webhook(request: Request):
                         "updated_at": datetime.now(timezone.utc).isoformat()
                     }}
                 )
-                
-                user_id = webhook_response.metadata.get("user_id")
-                plan_id = webhook_response.metadata.get("plan_id")
-                
-                if user_id and plan_id:
-                    expires_at = (datetime.now(timezone.utc) + timedelta(days=30)).isoformat()
-                    await db.users.update_one(
-                        {"id": user_id},
-                        {"$set": {
-                            "subscription_plan": plan_id,
-                            "subscription_status": "active",
-                            "subscription_expires": expires_at
-                        }}
-                    )
-        
+                await _settle_ledger_for_session(webhook_response.session_id)
         return {"status": "ok"}
     except Exception as e:
         logging.error(f"Webhook error: {e}")
@@ -610,10 +578,6 @@ async def get_my_jobs(current_user: dict = Depends(get_current_user)):
 
 @api_router.post("/jobs/{job_id}/accept")
 async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):
-    # Check subscription
-    if not current_user.get("subscription_plan") or current_user.get("subscription_status") != "active":
-        raise HTTPException(status_code=403, detail="Active subscription required to accept jobs")
-    
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -632,6 +596,64 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     return {"job": updated_job}
 
+@api_router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    """Driver cancels a job they previously accepted.
+    Within the grace window (default 5 min) it's free; after that a cancellation fee is charged."""
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("accepted_by") != current_user["id"]:
+        raise HTTPException(status_code=403, detail="Only the assigned driver can cancel this job")
+    if job.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="Only in-progress jobs can be cancelled")
+    
+    fees = await get_fees_from_db()
+    grace_min = fees.get("cancellation_grace_minutes", 5)
+    fee_amount = fees.get("cancellation_fee", 15.00)
+    
+    accepted_at = datetime.fromisoformat(job["accepted_at"])
+    now = datetime.now(timezone.utc)
+    elapsed_seconds = (now - accepted_at).total_seconds()
+    charged = elapsed_seconds > (grace_min * 60)
+    
+    # Reopen the job so other drivers can accept it
+    await db.jobs.update_one(
+        {"id": job_id},
+        {"$set": {
+            "status": "open",
+            "accepted_by": None,
+            "accepted_at": None,
+            "last_cancelled_by": current_user["id"],
+            "last_cancelled_at": now.isoformat()
+        }}
+    )
+    
+    ledger_entry = None
+    if charged:
+        ledger_entry = {
+            "id": str(uuid.uuid4()),
+            "driver_id": current_user["id"],
+            "job_id": job_id,
+            "type": "cancellation_fee",
+            "amount": round(fee_amount, 2),
+            "status": "owed",
+            "currency": "CAD",
+            "description": f"Late cancellation fee (after {grace_min} min grace window)",
+            "created_at": now.isoformat()
+        }
+        await db.ledger.insert_one(ledger_entry)
+        ledger_entry.pop("_id", None)
+    
+    return {
+        "job_id": job_id,
+        "charged": charged,
+        "grace_minutes": grace_min,
+        "elapsed_seconds": int(elapsed_seconds),
+        "cancellation_fee": round(fee_amount, 2) if charged else 0.0,
+        "ledger_entry": ledger_entry
+    }
+
 @api_router.post("/jobs/{job_id}/complete")
 async def complete_job(job_id: str, current_user: dict = Depends(get_current_user)):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
@@ -639,27 +661,54 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Job not found")
     if job["accepted_by"] != current_user["id"]:
         raise HTTPException(status_code=403, detail="Only the assigned driver can complete this job")
+    if job.get("status") != "in_progress":
+        raise HTTPException(status_code=400, detail="Only in-progress jobs can be completed")
     
+    now = datetime.now(timezone.utc)
     await db.jobs.update_one(
         {"id": job_id},
         {"$set": {
             "status": "completed",
-            "completed_at": datetime.now(timezone.utc).isoformat()
+            "completed_at": now.isoformat()
         }}
     )
     
-    # Record earnings
+    # Record gross earnings (what the driver charged the customer)
+    gross = float(job["offered_price"])
     earnings_doc = {
         "id": str(uuid.uuid4()),
         "driver_id": current_user["id"],
         "job_id": job_id,
-        "amount": job["offered_price"],
-        "created_at": datetime.now(timezone.utc).isoformat()
+        "amount": gross,
+        "created_at": now.isoformat()
     }
     await db.earnings.insert_one(earnings_doc)
     
+    # Record platform commission as owed ledger entry
+    fees = await get_fees_from_db()
+    commission_rate = float(fees.get("commission_rate", 0.20))
+    commission_amount = round(gross * commission_rate, 2)
+    ledger_entry = {
+        "id": str(uuid.uuid4()),
+        "driver_id": current_user["id"],
+        "job_id": job_id,
+        "type": "commission",
+        "amount": commission_amount,
+        "status": "owed",
+        "currency": "CAD",
+        "description": f"{int(commission_rate * 100)}% platform commission on trip ${gross:.2f}",
+        "created_at": now.isoformat()
+    }
+    await db.ledger.insert_one(ledger_entry)
+    ledger_entry.pop("_id", None)
+    
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
-    return {"job": updated_job}
+    return {
+        "job": updated_job,
+        "gross_earnings": gross,
+        "commission_charged": commission_amount,
+        "net_earnings": round(gross - commission_amount, 2)
+    }
 
 # Fee Agreement Routes
 @api_router.get("/fees/agreement")
@@ -703,26 +752,32 @@ async def get_earnings_stats(current_user: dict = Depends(get_current_user)):
 async def admin_stats(admin: dict = Depends(require_admin)):
     total_users = await db.users.count_documents({})
     admin_count = await db.users.count_documents({"role": "admin"})
-    active_subs = await db.users.count_documents({"subscription_status": "active"})
     total_jobs = await db.jobs.count_documents({})
     open_jobs = await db.jobs.count_documents({"status": "open"})
     in_progress_jobs = await db.jobs.count_documents({"status": "in_progress"})
     completed_jobs = await db.jobs.count_documents({"status": "completed"})
-    total_tx = await db.payment_transactions.count_documents({"payment_status": "paid"})
-    paid_tx_list = await db.payment_transactions.find(
-        {"payment_status": "paid"}, {"_id": 0, "amount": 1}
-    ).to_list(10000)
-    revenue = sum(t.get("amount", 0) for t in paid_tx_list)
+
+    ledger_entries = await db.ledger.find({}, {"_id": 0}).to_list(100000)
+    commission_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") == "owed"), 2)
+    commission_paid = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") == "paid"), 2)
+    cancel_fee_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "cancellation_fee" and e.get("status") == "owed"), 2)
+    cancel_fee_paid = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "cancellation_fee" and e.get("status") == "paid"), 2)
+
+    paid_tx_count = await db.payment_transactions.count_documents({"payment_status": "paid"})
     return {
         "total_users": total_users,
         "admin_count": admin_count,
-        "active_subscriptions": active_subs,
         "total_jobs": total_jobs,
         "open_jobs": open_jobs,
         "in_progress_jobs": in_progress_jobs,
         "completed_jobs": completed_jobs,
-        "paid_transactions": total_tx,
-        "total_revenue": round(revenue, 2),
+        "commission_owed": commission_owed,
+        "commission_paid": commission_paid,
+        "cancellation_fees_owed": cancel_fee_owed,
+        "cancellation_fees_paid": cancel_fee_paid,
+        "total_revenue": round(commission_paid + cancel_fee_paid, 2),
+        "total_outstanding": round(commission_owed + cancel_fee_owed, 2),
+        "paid_transactions": paid_tx_count,
         "currency": "CAD"
     }
 
@@ -778,25 +833,6 @@ async def admin_delete_job(job_id: str, admin: dict = Depends(require_admin)):
         raise HTTPException(status_code=404, detail="Job not found")
     return {"status": "deleted", "job_id": job_id}
 
-@api_router.get("/admin/plans")
-async def admin_get_plans(admin: dict = Depends(require_admin)):
-    plans = await get_plans_from_db()
-    return {"plans": plans}
-
-@api_router.put("/admin/plans/{plan_id}")
-async def admin_update_plan(plan_id: str, update: PlanUpdate, admin: dict = Depends(require_admin)):
-    plans = await get_plans_from_db()
-    if plan_id not in plans:
-        raise HTTPException(status_code=404, detail="Plan not found")
-    data = {k: v for k, v in update.model_dump().items() if v is not None}
-    plans[plan_id] = {**plans[plan_id], **data}
-    await db.settings.update_one(
-        {"key": "subscription_plans"},
-        {"$set": {"value": plans, "updated_at": datetime.now(timezone.utc).isoformat()}},
-        upsert=True
-    )
-    return {"plans": plans}
-
 @api_router.get("/admin/fees")
 async def admin_get_fees(admin: dict = Depends(require_admin)):
     fees = await get_fees_from_db()
@@ -814,6 +850,11 @@ async def admin_update_fees(update: FeeAgreementUpdate, admin: dict = Depends(re
         upsert=True
     )
     return {"agreement": fees}
+
+@api_router.get("/admin/ledger")
+async def admin_list_ledger(admin: dict = Depends(require_admin)):
+    entries = await db.ledger.find({}, {"_id": 0}).sort("created_at", -1).to_list(5000)
+    return {"entries": entries}
 
 @api_router.get("/admin/transactions")
 async def admin_list_transactions(admin: dict = Depends(require_admin)):
@@ -845,19 +886,19 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_event():
-    # Seed default plans/fees if missing
-    if not await db.settings.find_one({"key": "subscription_plans"}):
-        await db.settings.insert_one({
-            "key": "subscription_plans",
-            "value": DEFAULT_SUBSCRIPTION_PLANS,
-            "updated_at": datetime.now(timezone.utc).isoformat()
-        })
+    # Seed default fees if missing
     if not await db.settings.find_one({"key": "fee_agreement"}):
         await db.settings.insert_one({
             "key": "fee_agreement",
             "value": DEFAULT_FEE_AGREEMENT,
             "updated_at": datetime.now(timezone.utc).isoformat()
         })
+    # Clean up legacy subscription_plans settings doc (revenue model switched to commission)
+    await db.settings.delete_one({"key": "subscription_plans"})
+    # Remove stale subscription fields from users (cosmetic cleanup, harmless if absent)
+    await db.users.update_many({}, {"$unset": {
+        "subscription_plan": "", "subscription_status": "", "subscription_expires": ""
+    }})
     # Auto-promote admin if ADMIN_EMAIL user already exists
     if ADMIN_EMAIL:
         await db.users.update_one(

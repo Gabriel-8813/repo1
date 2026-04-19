@@ -11,30 +11,6 @@ import {
 const LandingPage = () => {
   const navigate = useNavigate();
 
-  const plans = [
-    {
-      id: 'basic',
-      name: 'Basic',
-      price: 49,
-      features: ['Up to 20 jobs/month', 'Basic support', 'Standard job alerts'],
-      highlighted: false
-    },
-    {
-      id: 'pro',
-      name: 'Pro',
-      price: 99,
-      features: ['Up to 50 jobs/month', 'Priority support', 'Advanced job matching', 'Earnings analytics'],
-      highlighted: true
-    },
-    {
-      id: 'premium',
-      name: 'Premium',
-      price: 149,
-      features: ['Unlimited jobs', '24/7 premium support', 'First access to jobs', 'Full analytics suite', 'Priority badge'],
-      highlighted: false
-    }
-  ];
-
   const permits = [
     { name: 'CVOR Certified', desc: 'Commercial Vehicle Operator\'s Registration' },
     { name: 'TDG Training', desc: 'Transportation of Dangerous Goods Certificate' },
@@ -214,52 +190,53 @@ const LandingPage = () => {
 
       {/* Pricing Section */}
       <section id="pricing" className="py-20 px-6">
-        <div className="max-w-7xl mx-auto">
+        <div className="max-w-5xl mx-auto">
           <div className="text-center mb-16">
-            <Badge className="mb-4">Subscription Plans</Badge>
+            <Badge className="mb-4">Simple Pay-As-You-Earn</Badge>
             <h2 className="font-archivo font-bold text-3xl md:text-4xl text-slate-900 mb-4">
-              Choose Your Plan
+              No monthly fees. Commission-based only.
             </h2>
             <p className="text-slate-600 max-w-2xl mx-auto">
-              Monthly subscription for drivers. Cancel anytime.
+              Sign up for free. You only pay when you earn — a flat 20% commission on each completed trip. A small fee applies if you cancel a trip more than 5 minutes after accepting.
             </p>
           </div>
-          
-          <div className="grid md:grid-cols-3 gap-8 max-w-5xl mx-auto">
-            {plans.map((plan) => (
-              <Card 
-                key={plan.id}
-                className={`relative p-8 ${plan.highlighted ? 'border-2 border-blue-600 shadow-[0_8px_24px_rgba(37,99,235,0.15)]' : 'border border-slate-200'}`}
-              >
-                {plan.highlighted && (
-                  <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-blue-600 text-white text-xs font-semibold px-3 py-1 rounded-full">
-                    Most Popular
-                  </div>
-                )}
-                <div className="text-center mb-6">
-                  <h3 className="font-archivo font-bold text-xl text-slate-900 mb-2">{plan.name}</h3>
-                  <div className="flex items-baseline justify-center gap-1">
-                    <span className="font-archivo font-black text-5xl text-slate-900">${plan.price}</span>
-                    <span className="text-slate-500">/mo</span>
-                  </div>
-                </div>
-                <ul className="space-y-3 mb-8">
-                  {plan.features.map((feature, i) => (
-                    <li key={i} className="flex items-center gap-2 text-slate-600">
-                      <CheckCircle className="w-5 h-5 text-emerald-500" />
-                      {feature}
-                    </li>
-                  ))}
-                </ul>
-                <Button 
-                  className={`w-full rounded-full ${plan.highlighted ? 'bg-blue-600 hover:bg-blue-700' : 'bg-slate-900 hover:bg-slate-800'}`}
-                  onClick={() => navigate('/register')}
-                  data-testid={`plan-${plan.id}-btn`}
-                >
-                  Get Started
-                </Button>
-              </Card>
-            ))}
+
+          <div className="grid md:grid-cols-3 gap-6 max-w-4xl mx-auto">
+            <Card className="p-8 text-center border-2 border-blue-600 shadow-[0_8px_24px_rgba(37,99,235,0.15)]">
+              <div className="w-14 h-14 mx-auto rounded-xl bg-blue-100 flex items-center justify-center mb-4">
+                <CreditCard className="w-7 h-7 text-blue-600" />
+              </div>
+              <p className="text-sm text-slate-500 mb-1">Platform Commission</p>
+              <p className="font-archivo font-black text-5xl text-slate-900">20%</p>
+              <p className="text-sm text-slate-500 mt-2">of every completed trip</p>
+            </Card>
+            <Card className="p-8 text-center border border-slate-200">
+              <div className="w-14 h-14 mx-auto rounded-xl bg-emerald-100 flex items-center justify-center mb-4">
+                <Clock className="w-7 h-7 text-emerald-600" />
+              </div>
+              <p className="text-sm text-slate-500 mb-1">Free Cancel Window</p>
+              <p className="font-archivo font-black text-5xl text-slate-900">5 min</p>
+              <p className="text-sm text-slate-500 mt-2">after accepting a trip</p>
+            </Card>
+            <Card className="p-8 text-center border border-slate-200">
+              <div className="w-14 h-14 mx-auto rounded-xl bg-amber-100 flex items-center justify-center mb-4">
+                <Shield className="w-7 h-7 text-amber-600" />
+              </div>
+              <p className="text-sm text-slate-500 mb-1">Late Cancellation Fee</p>
+              <p className="font-archivo font-black text-5xl text-slate-900">$15</p>
+              <p className="text-sm text-slate-500 mt-2">beyond the grace window</p>
+            </Card>
+          </div>
+
+          <div className="text-center mt-12">
+            <Button
+              size="lg"
+              onClick={() => navigate('/register')}
+              className="bg-blue-600 hover:bg-blue-700 rounded-full text-lg px-8"
+              data-testid="pricing-cta-btn"
+            >
+              Start Earning — Free Signup <ArrowRight className="ml-2 w-5 h-5" />
+            </Button>
           </div>
         </div>
       </section>

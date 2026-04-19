@@ -23,6 +23,7 @@ const DashboardPage = () => {
   const [myJobs, setMyJobs] = useState([]);
   const [permits, setPermits] = useState({});
   const [requiredPermits, setRequiredPermits] = useState([]);
+  const [balance, setBalance] = useState({ owed: 0, paid: 0, entries: [] });
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -32,12 +33,13 @@ const DashboardPage = () => {
   const fetchData = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes] = await Promise.all([
+      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes, balanceRes] = await Promise.all([
         axios.get(`${API}/earnings/stats`, { headers }),
         axios.get(`${API}/jobs/available`, { headers }),
         axios.get(`${API}/jobs/my`, { headers }),
         axios.get(`${API}/driver/permits`, { headers }),
-        axios.get(`${API}/permits`, { headers })
+        axios.get(`${API}/permits`, { headers }),
+        axios.get(`${API}/driver/balance`, { headers })
       ]);
       
       setStats(statsRes.data);
@@ -45,6 +47,7 @@ const DashboardPage = () => {
       setMyJobs(myJobsRes.data.jobs.filter(j => j.status === 'in_progress').slice(0, 3));
       setPermits(permitsRes.data.permits || {});
       setRequiredPermits(allPermitsRes.data.permits.filter(p => p.required));
+      setBalance(balanceRes.data);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -116,15 +119,6 @@ const DashboardPage = () => {
               {user?.role === 'admin' && (
                 <Badge className="bg-purple-100 text-purple-700" data-testid="dashboard-admin-badge">Admin</Badge>
               )}
-              {user?.subscription_plan ? (
-                <Badge className="bg-emerald-100 text-emerald-700 capitalize">
-                  {user.subscription_plan} Plan
-                </Badge>
-              ) : (
-                <Badge variant="outline" className="text-amber-600 border-amber-300">
-                  No Subscription
-                </Badge>
-              )}
               <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn">
                 <LogOut className="w-4 h-4 mr-2" /> Logout
               </Button>
@@ -142,9 +136,9 @@ const DashboardPage = () => {
           <p className="text-slate-600 mt-1">Here's what's happening with your deliveries.</p>
         </div>
 
-        {/* Subscription Alert */}
-        {!user?.subscription_plan && (
-          <Card className="mb-8 border-amber-200 bg-amber-50">
+        {/* Balance Owed Alert */}
+        {balance.owed > 0 && (
+          <Card className="mb-8 border-amber-200 bg-amber-50" data-testid="dashboard-balance-alert">
             <CardContent className="p-6">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
@@ -152,12 +146,12 @@ const DashboardPage = () => {
                     <AlertTriangle className="w-6 h-6 text-amber-600" />
                   </div>
                   <div>
-                    <h3 className="font-semibold text-slate-900">Subscription Required</h3>
-                    <p className="text-slate-600 text-sm">Subscribe to a plan to start accepting jobs</p>
+                    <h3 className="font-semibold text-slate-900">Outstanding Balance: ${balance.owed.toFixed(2)} CAD</h3>
+                    <p className="text-slate-600 text-sm">Platform commission & cancellation fees pending</p>
                   </div>
                 </div>
-                <Button onClick={() => navigate('/billing')} className="bg-amber-600 hover:bg-amber-700" data-testid="subscribe-cta-btn">
-                  Subscribe Now <ArrowRight className="w-4 h-4 ml-2" />
+                <Button onClick={() => navigate('/billing')} className="bg-amber-600 hover:bg-amber-700" data-testid="pay-balance-cta-btn">
+                  Pay Balance <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
             </CardContent>
@@ -274,7 +268,6 @@ const DashboardPage = () => {
                               size="sm" 
                               className="mt-2 bg-blue-600 hover:bg-blue-700 rounded-full"
                               onClick={() => handleAcceptJob(job.id)}
-                              disabled={!user?.subscription_plan}
                               data-testid={`accept-job-${job.id}-btn`}
                             >
                               Accept Job

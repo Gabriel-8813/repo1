@@ -13,7 +13,7 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from '../components/ui/table';
 import {
-  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle, DialogTrigger
+  Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle
 } from '../components/ui/dialog';
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -22,7 +22,7 @@ import {
 } from '../components/ui/alert-dialog';
 import {
   Shield, Truck, Users, Briefcase, DollarSign, Settings, LogOut,
-  Trash2, Pencil, TrendingUp, CheckCircle, AlertCircle, Crown
+  Trash2, Pencil, TrendingUp, AlertCircle, Crown, Percent, Receipt
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -34,15 +34,13 @@ const AdminDashboardPage = () => {
   const [stats, setStats] = useState(null);
   const [users, setUsers] = useState([]);
   const [jobs, setJobs] = useState([]);
-  const [plans, setPlans] = useState({});
   const [fees, setFees] = useState(null);
+  const [ledger, setLedger] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [editUser, setEditUser] = useState(null);
   const [editJob, setEditJob] = useState(null);
-  const [editPlanId, setEditPlanId] = useState(null);
-  const [planDraft, setPlanDraft] = useState({ name: '', price: '', features: '' });
   const [feeDraft, setFeeDraft] = useState(null);
 
   const headers = { Authorization: `Bearer ${token}` };
@@ -58,20 +56,20 @@ const AdminDashboardPage = () => {
 
   const fetchAll = async () => {
     try {
-      const [s, u, j, p, f, t] = await Promise.all([
+      const [s, u, j, f, l, t] = await Promise.all([
         axios.get(`${API}/admin/stats`, { headers }),
         axios.get(`${API}/admin/users`, { headers }),
         axios.get(`${API}/admin/jobs`, { headers }),
-        axios.get(`${API}/admin/plans`, { headers }),
         axios.get(`${API}/admin/fees`, { headers }),
+        axios.get(`${API}/admin/ledger`, { headers }),
         axios.get(`${API}/admin/transactions`, { headers }),
       ]);
       setStats(s.data);
       setUsers(u.data.users);
       setJobs(j.data.jobs);
-      setPlans(p.data.plans);
       setFees(f.data.agreement);
       setFeeDraft(f.data.agreement);
+      setLedger(l.data.entries);
       setTransactions(t.data.transactions);
     } catch (e) {
       toast.error('Failed to load admin data');
@@ -83,15 +81,12 @@ const AdminDashboardPage = () => {
 
   const handleLogout = () => { logout(); navigate('/'); };
 
-  // Users
   const saveUser = async () => {
     try {
       await axios.put(`${API}/admin/users/${editUser.id}`, {
         full_name: editUser.full_name,
         phone: editUser.phone,
         role: editUser.role,
-        subscription_status: editUser.subscription_status || null,
-        subscription_plan: editUser.subscription_plan || null,
       }, { headers });
       toast.success('User updated');
       setEditUser(null);
@@ -110,7 +105,6 @@ const AdminDashboardPage = () => {
     }
   };
 
-  // Jobs
   const saveJob = async () => {
     try {
       await axios.put(`${API}/admin/jobs/${editJob.id}`, {
@@ -137,32 +131,6 @@ const AdminDashboardPage = () => {
     }
   };
 
-  // Plans
-  const openPlanEditor = (id) => {
-    const p = plans[id];
-    setEditPlanId(id);
-    setPlanDraft({
-      name: p.name,
-      price: p.price,
-      features: (p.features || []).join('\n')
-    });
-  };
-  const savePlan = async () => {
-    try {
-      await axios.put(`${API}/admin/plans/${editPlanId}`, {
-        name: planDraft.name,
-        price: Number(planDraft.price),
-        features: planDraft.features.split('\n').map(s => s.trim()).filter(Boolean),
-      }, { headers });
-      toast.success('Plan updated');
-      setEditPlanId(null);
-      fetchAll();
-    } catch (e) {
-      toast.error(e.response?.data?.detail || 'Update failed');
-    }
-  };
-
-  // Fees
   const saveFees = async () => {
     try {
       await axios.put(`${API}/admin/fees`, {
@@ -171,7 +139,9 @@ const AdminDashboardPage = () => {
         urgent_multiplier: Number(feeDraft.urgent_multiplier),
         emergency_multiplier: Number(feeDraft.emergency_multiplier),
         temperature_controlled_fee: Number(feeDraft.temperature_controlled_fee),
-        platform_commission: Number(feeDraft.platform_commission),
+        commission_rate: Number(feeDraft.commission_rate),
+        cancellation_fee: Number(feeDraft.cancellation_fee),
+        cancellation_grace_minutes: parseInt(feeDraft.cancellation_grace_minutes),
       }, { headers });
       toast.success('Fee agreement updated');
       fetchAll();
@@ -190,7 +160,6 @@ const AdminDashboardPage = () => {
 
   return (
     <div className="min-h-screen bg-slate-50" data-testid="admin-dashboard-page">
-      {/* Navigation */}
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-6">
@@ -224,28 +193,26 @@ const AdminDashboardPage = () => {
           <Shield className="w-8 h-8 text-blue-600" />
           <div>
             <h1 className="font-archivo font-bold text-3xl text-slate-900">Admin Control Center</h1>
-            <p className="text-slate-600 mt-1">Manage users, jobs, plans and platform fees</p>
+            <p className="text-slate-600 mt-1">Commission-based revenue · users, jobs, fees & ledger</p>
           </div>
         </div>
 
-        {/* Stats */}
         <div className="grid md:grid-cols-4 gap-6 mb-8">
           <StatCard icon={<Users className="w-6 h-6 text-blue-600" />} label="Total Users" value={stats.total_users} tone="blue" />
-          <StatCard icon={<CheckCircle className="w-6 h-6 text-emerald-600" />} label="Active Subscriptions" value={stats.active_subscriptions} tone="emerald" />
-          <StatCard icon={<Briefcase className="w-6 h-6 text-amber-600" />} label="Total Jobs" value={stats.total_jobs} subtitle={`${stats.open_jobs} open · ${stats.in_progress_jobs} in progress`} tone="amber" />
-          <StatCard icon={<TrendingUp className="w-6 h-6 text-purple-600" />} label="Revenue (paid)" value={`$${stats.total_revenue.toFixed(2)}`} subtitle={`${stats.paid_transactions} transactions`} tone="purple" />
+          <StatCard icon={<Briefcase className="w-6 h-6 text-amber-600" />} label="Jobs" value={stats.total_jobs} subtitle={`${stats.open_jobs} open · ${stats.completed_jobs} completed`} tone="amber" />
+          <StatCard icon={<TrendingUp className="w-6 h-6 text-emerald-600" />} label="Revenue (paid)" value={`$${stats.total_revenue.toFixed(2)}`} subtitle={`${stats.paid_transactions} transactions`} tone="emerald" />
+          <StatCard icon={<AlertCircle className="w-6 h-6 text-red-600" />} label="Outstanding" value={`$${stats.total_outstanding.toFixed(2)}`} subtitle={`commission $${stats.commission_owed.toFixed(2)} · cancel $${stats.cancellation_fees_owed.toFixed(2)}`} tone="red" />
         </div>
 
         <Tabs defaultValue="users" className="w-full">
           <TabsList className="mb-6">
             <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-2" />Users</TabsTrigger>
             <TabsTrigger value="jobs" data-testid="tab-jobs"><Briefcase className="w-4 h-4 mr-2" />Jobs</TabsTrigger>
-            <TabsTrigger value="plans" data-testid="tab-plans"><DollarSign className="w-4 h-4 mr-2" />Plans</TabsTrigger>
-            <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees</TabsTrigger>
-            <TabsTrigger value="tx" data-testid="tab-tx"><TrendingUp className="w-4 h-4 mr-2" />Transactions</TabsTrigger>
+            <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees & Commission</TabsTrigger>
+            <TabsTrigger value="ledger" data-testid="tab-ledger"><Receipt className="w-4 h-4 mr-2" />Ledger</TabsTrigger>
+            <TabsTrigger value="tx" data-testid="tab-tx"><DollarSign className="w-4 h-4 mr-2" />Transactions</TabsTrigger>
           </TabsList>
 
-          {/* USERS */}
           <TabsContent value="users">
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader><CardTitle className="font-archivo">All Users ({users.length})</CardTitle></CardHeader>
@@ -256,7 +223,6 @@ const AdminDashboardPage = () => {
                       <TableHead>Email</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Role</TableHead>
-                      <TableHead>Subscription</TableHead>
                       <TableHead>Joined</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
@@ -270,11 +236,6 @@ const AdminDashboardPage = () => {
                           <Badge className={u.role === 'admin' ? 'bg-purple-100 text-purple-700' : 'bg-slate-100 text-slate-700'}>
                             {u.role}
                           </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {u.subscription_plan ? (
-                            <Badge className="bg-emerald-100 text-emerald-700 capitalize">{u.subscription_plan}</Badge>
-                          ) : <span className="text-slate-400 text-xs">none</span>}
                         </TableCell>
                         <TableCell className="text-slate-500 text-xs">
                           {new Date(u.created_at).toLocaleDateString()}
@@ -293,14 +254,12 @@ const AdminDashboardPage = () => {
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Delete user?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  This will permanently remove {u.email}. This cannot be undone.
+                                  This will permanently remove {u.email}.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>
                               <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => deleteUser(u.id)} data-testid={`confirm-delete-user-${u.id}-btn`}>
-                                  Delete
-                                </AlertDialogAction>
+                                <AlertDialogAction onClick={() => deleteUser(u.id)} data-testid={`confirm-delete-user-${u.id}-btn`}>Delete</AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>
@@ -313,7 +272,6 @@ const AdminDashboardPage = () => {
             </Card>
           </TabsContent>
 
-          {/* JOBS */}
           <TabsContent value="jobs">
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader><CardTitle className="font-archivo">All Jobs ({jobs.length})</CardTitle></CardHeader>
@@ -363,9 +321,7 @@ const AdminDashboardPage = () => {
                               </AlertDialogHeader>
                               <AlertDialogFooter>
                                 <AlertDialogCancel>Cancel</AlertDialogCancel>
-                                <AlertDialogAction onClick={() => deleteJob(j.id)} data-testid={`confirm-delete-job-${j.id}-btn`}>
-                                  Delete
-                                </AlertDialogAction>
+                                <AlertDialogAction onClick={() => deleteJob(j.id)} data-testid={`confirm-delete-job-${j.id}-btn`}>Delete</AlertDialogAction>
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>
@@ -378,69 +334,92 @@ const AdminDashboardPage = () => {
             </Card>
           </TabsContent>
 
-          {/* PLANS */}
-          <TabsContent value="plans">
-            <div className="grid md:grid-cols-3 gap-6">
-              {Object.entries(plans).map(([id, p]) => (
-                <Card key={id} className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]" data-testid={`plan-card-${id}`}>
-                  <CardHeader>
-                    <div className="flex items-start justify-between">
-                      <div>
-                        <CardTitle className="font-archivo capitalize">{p.name}</CardTitle>
-                        <p className="text-3xl font-black mt-2">${p.price}<span className="text-sm text-slate-500 font-normal">/mo CAD</span></p>
-                      </div>
-                      <Button size="sm" variant="outline" onClick={() => openPlanEditor(id)} data-testid={`edit-plan-${id}-btn`}>
-                        <Pencil className="w-3 h-3 mr-1" /> Edit
-                      </Button>
-                    </div>
-                  </CardHeader>
-                  <CardContent>
-                    <ul className="space-y-2">
-                      {(p.features || []).map((f, i) => (
-                        <li key={i} className="flex items-start gap-2 text-sm">
-                          <CheckCircle className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
-                          <span>{f}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          </TabsContent>
-
-          {/* FEES */}
           <TabsContent value="fees">
-            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)] max-w-2xl">
+            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)] max-w-3xl">
               <CardHeader>
-                <CardTitle className="font-archivo">Platform Fee Agreement</CardTitle>
-                <p className="text-sm text-slate-500">Changes apply platform-wide immediately.</p>
+                <CardTitle className="font-archivo flex items-center gap-2">
+                  <Percent className="w-5 h-5" /> Commission & Fee Agreement
+                </CardTitle>
+                <p className="text-sm text-slate-500">Platform-wide rates — changes apply immediately</p>
               </CardHeader>
               <CardContent className="space-y-4">
                 {feeDraft && (
-                  <>
-                    <FeeField label="Base Rate per KM (CAD)" value={feeDraft.base_rate_per_km}
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <FeeField label="Commission Rate (0-1)" hint="e.g. 0.20 = 20%"
+                      value={feeDraft.commission_rate}
+                      onChange={v => setFeeDraft({ ...feeDraft, commission_rate: v })} testid="fee-commission-rate" />
+                    <FeeField label="Cancellation Fee (CAD)"
+                      value={feeDraft.cancellation_fee}
+                      onChange={v => setFeeDraft({ ...feeDraft, cancellation_fee: v })} testid="fee-cancellation" />
+                    <FeeField label="Grace Window (minutes)"
+                      value={feeDraft.cancellation_grace_minutes}
+                      onChange={v => setFeeDraft({ ...feeDraft, cancellation_grace_minutes: v })} testid="fee-grace" step="1" />
+                    <FeeField label="Base Rate per KM (CAD)"
+                      value={feeDraft.base_rate_per_km}
                       onChange={v => setFeeDraft({ ...feeDraft, base_rate_per_km: v })} testid="fee-base-rate" />
-                    <FeeField label="Minimum Fee (CAD)" value={feeDraft.minimum_fee}
+                    <FeeField label="Minimum Trip Fee (CAD)"
+                      value={feeDraft.minimum_fee}
                       onChange={v => setFeeDraft({ ...feeDraft, minimum_fee: v })} testid="fee-min" />
-                    <FeeField label="Urgent Multiplier" value={feeDraft.urgent_multiplier}
+                    <FeeField label="Urgent Multiplier"
+                      value={feeDraft.urgent_multiplier}
                       onChange={v => setFeeDraft({ ...feeDraft, urgent_multiplier: v })} testid="fee-urgent" />
-                    <FeeField label="Emergency Multiplier" value={feeDraft.emergency_multiplier}
+                    <FeeField label="Emergency Multiplier"
+                      value={feeDraft.emergency_multiplier}
                       onChange={v => setFeeDraft({ ...feeDraft, emergency_multiplier: v })} testid="fee-emergency" />
-                    <FeeField label="Temperature Controlled Fee (CAD)" value={feeDraft.temperature_controlled_fee}
+                    <FeeField label="Temp-Controlled Add-on (CAD)"
+                      value={feeDraft.temperature_controlled_fee}
                       onChange={v => setFeeDraft({ ...feeDraft, temperature_controlled_fee: v })} testid="fee-temp" />
-                    <FeeField label="Platform Commission (0-1)" value={feeDraft.platform_commission}
-                      onChange={v => setFeeDraft({ ...feeDraft, platform_commission: v })} testid="fee-commission" />
-                    <Button onClick={saveFees} className="bg-blue-600 hover:bg-blue-700 mt-2" data-testid="save-fees-btn">
-                      Save Fee Agreement
-                    </Button>
-                  </>
+                  </div>
                 )}
+                <Button onClick={saveFees} className="bg-blue-600 hover:bg-blue-700" data-testid="save-fees-btn">
+                  Save Changes
+                </Button>
               </CardContent>
             </Card>
           </TabsContent>
 
-          {/* TRANSACTIONS */}
+          <TabsContent value="ledger">
+            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+              <CardHeader><CardTitle className="font-archivo">Commission & Cancellation Ledger ({ledger.length})</CardTitle></CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Type</TableHead>
+                      <TableHead>Driver</TableHead>
+                      <TableHead>Job</TableHead>
+                      <TableHead>Amount</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Date</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {ledger.length === 0 ? (
+                      <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">No ledger activity yet</TableCell></TableRow>
+                    ) : ledger.map(e => (
+                      <TableRow key={e.id}>
+                        <TableCell>
+                          <Badge className={e.type === 'commission' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}>
+                            {e.type === 'commission' ? 'Commission' : 'Cancellation'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="font-mono text-xs">{e.driver_id?.slice(0, 8)}...</TableCell>
+                        <TableCell className="font-mono text-xs">{e.job_id?.slice(0, 8)}...</TableCell>
+                        <TableCell className="font-semibold">${e.amount?.toFixed(2)}</TableCell>
+                        <TableCell>
+                          <Badge className={e.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}>
+                            {e.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-500">{new Date(e.created_at).toLocaleString()}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          </TabsContent>
+
           <TabsContent value="tx">
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader><CardTitle className="font-archivo">Payment Transactions ({transactions.length})</CardTitle></CardHeader>
@@ -450,7 +429,7 @@ const AdminDashboardPage = () => {
                     <TableRow>
                       <TableHead>Session</TableHead>
                       <TableHead>User</TableHead>
-                      <TableHead>Plan</TableHead>
+                      <TableHead>Type</TableHead>
                       <TableHead>Amount</TableHead>
                       <TableHead>Status</TableHead>
                       <TableHead>Date</TableHead>
@@ -463,7 +442,7 @@ const AdminDashboardPage = () => {
                       <TableRow key={tx.id}>
                         <TableCell className="font-mono text-xs">{tx.session_id?.slice(0, 16)}...</TableCell>
                         <TableCell className="text-xs">{tx.user_id?.slice(0, 8)}...</TableCell>
-                        <TableCell className="capitalize">{tx.plan_id}</TableCell>
+                        <TableCell>{tx.payment_type || 'balance'}</TableCell>
                         <TableCell>${tx.amount?.toFixed(2)} {tx.currency?.toUpperCase()}</TableCell>
                         <TableCell>
                           <Badge className={tx.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}>
@@ -484,9 +463,7 @@ const AdminDashboardPage = () => {
       {/* Edit User Dialog */}
       <Dialog open={!!editUser} onOpenChange={(o) => !o && setEditUser(null)}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit User</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Edit User</DialogTitle></DialogHeader>
           {editUser && (
             <div className="space-y-4">
               <div><Label>Email</Label><Input value={editUser.email} disabled /></div>
@@ -500,36 +477,12 @@ const AdminDashboardPage = () => {
                   onChange={e => setEditUser({ ...editUser, phone: e.target.value })} />
               </div>
               <div><Label>Role</Label>
-                <select
-                  className="w-full h-10 rounded-md border border-slate-200 px-3"
+                <select className="w-full h-10 rounded-md border border-slate-200 px-3"
                   value={editUser.role}
                   onChange={e => setEditUser({ ...editUser, role: e.target.value })}
-                  data-testid="edit-user-role-select"
-                >
+                  data-testid="edit-user-role-select">
                   <option value="driver">driver</option>
                   <option value="admin">admin</option>
-                </select>
-              </div>
-              <div><Label>Subscription Plan</Label>
-                <select
-                  className="w-full h-10 rounded-md border border-slate-200 px-3"
-                  value={editUser.subscription_plan || ''}
-                  onChange={e => setEditUser({ ...editUser, subscription_plan: e.target.value })}
-                >
-                  <option value="">none</option>
-                  {Object.keys(plans).map(id => <option key={id} value={id}>{id}</option>)}
-                </select>
-              </div>
-              <div><Label>Subscription Status</Label>
-                <select
-                  className="w-full h-10 rounded-md border border-slate-200 px-3"
-                  value={editUser.subscription_status || ''}
-                  onChange={e => setEditUser({ ...editUser, subscription_status: e.target.value })}
-                >
-                  <option value="">none</option>
-                  <option value="active">active</option>
-                  <option value="cancelled">cancelled</option>
-                  <option value="expired">expired</option>
                 </select>
               </div>
             </div>
@@ -551,12 +504,10 @@ const AdminDashboardPage = () => {
                 <Input value={editJob.title || ''} onChange={e => setEditJob({ ...editJob, title: e.target.value })} data-testid="edit-job-title-input" />
               </div>
               <div><Label>Status</Label>
-                <select
-                  className="w-full h-10 rounded-md border border-slate-200 px-3"
+                <select className="w-full h-10 rounded-md border border-slate-200 px-3"
                   value={editJob.status}
                   onChange={e => setEditJob({ ...editJob, status: e.target.value })}
-                  data-testid="edit-job-status-select"
-                >
+                  data-testid="edit-job-status-select">
                   <option value="open">open</option>
                   <option value="in_progress">in_progress</option>
                   <option value="completed">completed</option>
@@ -564,11 +515,9 @@ const AdminDashboardPage = () => {
                 </select>
               </div>
               <div><Label>Urgency</Label>
-                <select
-                  className="w-full h-10 rounded-md border border-slate-200 px-3"
+                <select className="w-full h-10 rounded-md border border-slate-200 px-3"
                   value={editJob.urgency}
-                  onChange={e => setEditJob({ ...editJob, urgency: e.target.value })}
-                >
+                  onChange={e => setEditJob({ ...editJob, urgency: e.target.value })}>
                   <option value="standard">standard</option>
                   <option value="urgent">urgent</option>
                   <option value="emergency">emergency</option>
@@ -588,35 +537,14 @@ const AdminDashboardPage = () => {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-
-      {/* Edit Plan Dialog */}
-      <Dialog open={!!editPlanId} onOpenChange={(o) => !o && setEditPlanId(null)}>
-        <DialogContent>
-          <DialogHeader><DialogTitle>Edit Plan: {editPlanId}</DialogTitle></DialogHeader>
-          <div className="space-y-4">
-            <div><Label>Name</Label>
-              <Input value={planDraft.name} onChange={e => setPlanDraft({ ...planDraft, name: e.target.value })} data-testid="edit-plan-name-input" />
-            </div>
-            <div><Label>Price (CAD)</Label>
-              <Input type="number" value={planDraft.price} onChange={e => setPlanDraft({ ...planDraft, price: e.target.value })} data-testid="edit-plan-price-input" />
-            </div>
-            <div><Label>Features (one per line)</Label>
-              <Textarea rows={5} value={planDraft.features} onChange={e => setPlanDraft({ ...planDraft, features: e.target.value })} data-testid="edit-plan-features-input" />
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setEditPlanId(null)}>Cancel</Button>
-            <Button onClick={savePlan} className="bg-blue-600 hover:bg-blue-700" data-testid="save-plan-btn">Save</Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 };
 
 const StatCard = ({ icon, label, value, subtitle, tone }) => {
   const toneMap = {
-    blue: 'bg-blue-100', emerald: 'bg-emerald-100', amber: 'bg-amber-100', purple: 'bg-purple-100'
+    blue: 'bg-blue-100', emerald: 'bg-emerald-100', amber: 'bg-amber-100',
+    purple: 'bg-purple-100', red: 'bg-red-100'
   };
   return (
     <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
@@ -632,10 +560,11 @@ const StatCard = ({ icon, label, value, subtitle, tone }) => {
   );
 };
 
-const FeeField = ({ label, value, onChange, testid }) => (
+const FeeField = ({ label, hint, value, onChange, testid, step = '0.01' }) => (
   <div>
     <Label>{label}</Label>
-    <Input type="number" step="0.01" value={value} onChange={e => onChange(e.target.value)} data-testid={testid} />
+    <Input type="number" step={step} value={value} onChange={e => onChange(e.target.value)} data-testid={testid} />
+    {hint && <p className="text-xs text-slate-400 mt-1">{hint}</p>}
   </div>
 );
 
