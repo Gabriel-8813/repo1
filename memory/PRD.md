@@ -17,10 +17,12 @@ Build an app for medical transportation that people can register and pay a month
 ## Core Requirements (Static)
 - Driver registration with JWT authentication
 - Ontario permit/license requirements checklist
-- Monthly subscription plans ($49 Basic, $99 Pro, $149 Premium)
-- Job posting and accepting system
-- Billing dashboard with fee agreements
-- Payment processing via Stripe
+- **Commission-based revenue model**: 20% platform commission on completed trips
+- **Cancellation policy**: 5-minute grace window after accepting a job; $15 late-cancellation fee after that
+- Job posting and accepting system (no subscription required)
+- Driver balance & ledger (commission + cancellation fees)
+- Pay-off-balance via Stripe Checkout
+- Admin (creator) auto-promoted via `ADMIN_EMAIL` env var
 
 ## What's Been Implemented (January 2026)
 
@@ -50,9 +52,19 @@ Build an app for medical transportation that people can register and pay a month
 
 ### Admin UI (Feb 2026)
 - `/admin` route with `AdminRoute` guard (role='admin' only)
-- `AdminDashboardPage.js`: Stats cards + tabs (Users, Jobs, Plans, Fees, Transactions)
-- Edit dialogs for users/jobs/plans with confirm-delete AlertDialogs
+- `AdminDashboardPage.js`: Stats cards + tabs (Users, Jobs, Fees & Commission, Ledger, Transactions)
+- Edit dialogs for users/jobs with confirm-delete AlertDialogs
 - Admin badge + nav link shown conditionally on Dashboard
+
+### Commission Model Pivot (Feb 19 2026)
+- **Removed**: Subscription plans (Basic/Pro/Premium), `/api/subscriptions/plans`, `/api/admin/plans`, subscription gating on job acceptance
+- **Added**: Commission-based revenue — 20% of every completed trip recorded in `ledger` collection as `{type:'commission', status:'owed'}`
+- **Added**: Cancellation flow — `/api/jobs/{id}/cancel` with 5-min grace (free) or $15 fee after
+- **Added**: `/api/driver/balance` shows owed/paid totals + full ledger entries
+- **Added**: `/api/payments/balance/checkout` — Stripe Checkout to pay off outstanding balance; on paid, settles matching ledger entries
+- **Added**: `/api/admin/ledger` + stats updated with `commission_owed/paid`, `cancellation_fees_owed/paid`, `total_outstanding`
+- **Admin-editable**: commission rate, cancellation fee, grace window via Fees tab
+- **Frontend**: BillingPage rewritten (balance + ledger + fee agreement); JobsPage adds Cancel button with grace countdown; Dashboard shows balance alert; Landing page swapped subscription tiers for commission messaging
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
