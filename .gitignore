@@ -96,3 +96,12 @@ frontend/android/.gradle/
 frontend/android/build/
 frontend/android/app/build/
 frontend/android/local.properties
+-e 
+# Environment and credential files
+.env
+.env.*
+*.env
+credentials.json
+*.pem
+*.key
+.credentials
