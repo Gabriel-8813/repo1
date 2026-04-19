@@ -11,6 +11,7 @@ import uuid
 from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
+import stripe
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 ROOT_DIR = Path(__file__).parent
@@ -28,6 +29,7 @@ JWT_EXPIRATION_HOURS = 24
 
 # Stripe Config
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
+stripe.api_key = STRIPE_API_KEY
 
 # Admin Config
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').lower().strip()
@@ -617,7 +619,9 @@ async def get_tip_info(job_id: str):
 
 @api_router.post("/tips/checkout/{job_id}")
 async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Request):
-    """Public — no auth. Creates a Stripe Checkout for a tip to the assigned driver of a completed trip."""
+    """Public — no auth. Creates a Stripe Checkout for a tip. If driver has completed Stripe Connect
+    onboarding, the tip is routed directly to their connected account (destination charge, 100% to driver).
+    Otherwise the tip goes to the platform account and is credited to driver earnings on webhook."""
     if req.amount <= 0:
         raise HTTPException(status_code=400, detail="Tip amount must be positive")
     if req.amount > 10000:
@@ -631,32 +635,74 @@ async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Req
     if not driver_id:
         raise HTTPException(status_code=400, detail="No driver on this trip")
 
+    driver = await db.users.find_one({"id": driver_id}, {"_id": 0})
     amount = round(float(req.amount), 2)
-
-    host_url = str(request.base_url).rstrip('/')
-    webhook_url = f"{host_url}/api/webhook/stripe"
-    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+    amount_cents = int(round(amount * 100))
 
     success_url = f"{req.origin_url}/tip/{job_id}?session_id={{CHECKOUT_SESSION_ID}}"
     cancel_url = f"{req.origin_url}/tip/{job_id}"
 
-    checkout_request = CheckoutSessionRequest(
-        amount=amount,
-        currency="cad",
-        success_url=success_url,
-        cancel_url=cancel_url,
-        metadata={
-            "job_id": job_id,
-            "driver_id": driver_id,
-            "payment_type": "tip",
-            "tipper_name": (req.tipper_name or "")[:80]
-        }
-    )
-    session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(checkout_request)
+    # If driver is fully onboarded with Connect, use destination charge (split at source)
+    connect_account_id = driver.get("stripe_account_id") if driver else None
+    connect_charges_enabled = bool(driver and driver.get("stripe_charges_enabled"))
+    use_connect = bool(connect_account_id and connect_charges_enabled)
+
+    try:
+        if use_connect:
+            session = stripe.checkout.Session.create(
+                mode="payment",
+                line_items=[{
+                    "price_data": {
+                        "currency": "cad",
+                        "product_data": {"name": f"Tip for {driver['full_name']}", "description": f"Trip: {job['title']}"},
+                        "unit_amount": amount_cents,
+                    },
+                    "quantity": 1,
+                }],
+                payment_intent_data={
+                    # Destination charge — 100% of tip routed to driver's connected account
+                    "transfer_data": {"destination": connect_account_id},
+                    "description": f"MediTrans tip — {job['title']}",
+                },
+                metadata={
+                    "job_id": job_id,
+                    "driver_id": driver_id,
+                    "payment_type": "tip",
+                    "tipper_name": (req.tipper_name or "")[:80],
+                    "connect": "true"
+                },
+                success_url=success_url,
+                cancel_url=cancel_url,
+            )
+            checkout_url = session.url
+            session_id = session.id
+        else:
+            # Fallback: platform captures funds, driver earnings credited via webhook/status poll
+            host_url = str(request.base_url).rstrip('/')
+            webhook_url = f"{host_url}/api/webhook/stripe"
+            emergent_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
+            emergent_req = CheckoutSessionRequest(
+                amount=amount,
+                currency="cad",
+                success_url=success_url,
+                cancel_url=cancel_url,
+                metadata={
+                    "job_id": job_id,
+                    "driver_id": driver_id,
+                    "payment_type": "tip",
+                    "tipper_name": (req.tipper_name or "")[:80],
+                    "connect": "false"
+                }
+            )
+            em_session: CheckoutSessionResponse = await emergent_checkout.create_checkout_session(emergent_req)
+            checkout_url = em_session.url
+            session_id = em_session.session_id
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
 
     await db.payment_transactions.insert_one({
         "id": str(uuid.uuid4()),
-        "session_id": session.session_id,
+        "session_id": session_id,
         "payment_type": "tip",
         "job_id": job_id,
         "driver_id": driver_id,
@@ -665,11 +711,13 @@ async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Req
         "currency": "cad",
         "status": "pending",
         "payment_status": "initiated",
+        "connect_routed": use_connect,
+        "stripe_account_id": connect_account_id if use_connect else None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "updated_at": datetime.now(timezone.utc).isoformat()
     })
 
-    return {"checkout_url": session.url, "session_id": session.session_id, "amount": amount}
+    return {"checkout_url": checkout_url, "session_id": session_id, "amount": amount, "routed_to_driver": use_connect}
 
 @api_router.get("/tips/status/{session_id}")
 async def get_tip_status(session_id: str, request: Request):
@@ -706,6 +754,104 @@ async def get_driver_tips(current_user: dict = Depends(get_current_user)):
     ).sort("created_at", -1).to_list(500)
     total = round(sum(t.get("amount", 0) for t in tips), 2)
     return {"tips": tips, "total": total, "count": len(tips), "currency": "CAD"}
+
+# ======================
+# Stripe Connect (Express) — driver payouts
+# ======================
+class ConnectOnboardRequest(BaseModel):
+    origin_url: str
+
+@api_router.post("/driver/connect/onboard")
+async def start_connect_onboarding(req: ConnectOnboardRequest, current_user: dict = Depends(get_current_user)):
+    """Create (or reuse) a Stripe Express account for the driver and return an onboarding link."""
+    try:
+        account_id = current_user.get("stripe_account_id")
+        if not account_id:
+            acct = stripe.Account.create(
+                type="express",
+                country="CA",
+                email=current_user["email"],
+                capabilities={
+                    "card_payments": {"requested": True},
+                    "transfers": {"requested": True}
+                },
+                business_type="individual",
+                business_profile={
+                    "product_description": "Medical transportation services in Ontario, Canada",
+                    "mcc": "4789"  # Transportation Services - Not Elsewhere Classified
+                },
+                metadata={"user_id": current_user["id"]}
+            )
+            account_id = acct.id
+            await db.users.update_one(
+                {"id": current_user["id"]},
+                {"$set": {
+                    "stripe_account_id": account_id,
+                    "stripe_charges_enabled": False,
+                    "stripe_payouts_enabled": False,
+                    "stripe_details_submitted": False
+                }}
+            )
+
+        account_link = stripe.AccountLink.create(
+            account=account_id,
+            refresh_url=f"{req.origin_url}/billing?stripe_refresh=1",
+            return_url=f"{req.origin_url}/billing?stripe_return=1",
+            type="account_onboarding"
+        )
+        return {"url": account_link.url, "account_id": account_id}
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
+
+@api_router.get("/driver/connect/status")
+async def get_connect_status(current_user: dict = Depends(get_current_user)):
+    """Return Stripe Connect onboarding status for the current driver; syncs flags from Stripe."""
+    account_id = current_user.get("stripe_account_id")
+    if not account_id:
+        return {
+            "connected": False,
+            "charges_enabled": False,
+            "payouts_enabled": False,
+            "details_submitted": False,
+            "account_id": None
+        }
+    try:
+        acct = stripe.Account.retrieve(account_id)
+        # Sync latest Stripe-side flags into our user doc
+        await db.users.update_one(
+            {"id": current_user["id"]},
+            {"$set": {
+                "stripe_charges_enabled": bool(acct.charges_enabled),
+                "stripe_payouts_enabled": bool(acct.payouts_enabled),
+                "stripe_details_submitted": bool(acct.details_submitted)
+            }}
+        )
+        return {
+            "connected": True,
+            "charges_enabled": bool(acct.charges_enabled),
+            "payouts_enabled": bool(acct.payouts_enabled),
+            "details_submitted": bool(acct.details_submitted),
+            "account_id": account_id,
+            "requirements": {
+                "currently_due": list(acct.requirements.currently_due or []),
+                "past_due": list(acct.requirements.past_due or []),
+                "disabled_reason": acct.requirements.disabled_reason
+            }
+        }
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
+
+@api_router.post("/driver/connect/login-link")
+async def create_connect_login_link(current_user: dict = Depends(get_current_user)):
+    """Generate a one-time link to the driver's Stripe Express dashboard."""
+    account_id = current_user.get("stripe_account_id")
+    if not account_id:
+        raise HTTPException(status_code=400, detail="No Stripe account connected yet")
+    try:
+        link = stripe.Account.create_login_link(account_id)
+        return {"url": link.url}
+    except stripe.error.StripeError as e:
+        raise HTTPException(status_code=400, detail=f"Stripe error: {str(e)}")
 
 # Job Routes
 @api_router.post("/jobs", response_model=JobResponse)

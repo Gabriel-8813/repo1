@@ -1,0 +1,48 @@
+{
+  "summary": "End-to-end testing of Stripe Connect (Express) integration for driver payouts. Backend: 16/16 pytest PASSED in /app/backend/tests/test_stripe_connect.py — covers RBAC on all 3 /driver/connect/* endpoints, empty-status shape, onboard (creates real Stripe Express account with country=CA + card_payments/transfers capabilities, persists stripe_account_id, returns stripe.com account_link URL), onboard idempotency (reuses existing stripe_account_id, returns fresh URL), status post-onboard (connected:true, charges_enabled:false as expected for unfinished hosted flow, requirements.currently_due present), login-link 400 before + accepts 200/400 after, tip-flow fallback when charges_enabled=false (routed_to_driver:false, payment_transactions.connect_routed:false), Connect-routed code path with fake acct_ (returns 400 Stripe error as expected), tip fallback with no account, plus regression (admin/stats, driver/balance, permits/list, driver/tips shape). Frontend: Playwright verified 3 UI states on /billing — (1) unconnected → 'Not Connected' grey badge + 'Connect Stripe' button triggers POST /driver/connect/onboard, (2) connected-but-incomplete → amber 'Onboarding Incomplete' badge + 'Finish Onboarding' button, (3) charges_enabled=true (mocked via route intercept) → green 'Active' badge + 'Stripe Dashboard' button that calls POST /driver/connect/login-link and invokes window.open(stripeUrl, '_blank', 'noopener,noreferrer'). ?stripe_return=1 shows 'Stripe onboarding complete' toast and strips the param. All 3 test Express accounts deleted via stripe.Account.delete; driver1 restored to unconnected state. No bugs found.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {"ui_bugs": [], "integration_issues": [], "design_issues": []},
+  "test_report_links": [
+    "/app/backend/tests/test_stripe_connect.py",
+    "/app/test_reports/pytest/stripe_connect_results.xml"
+  ],
+  "action_items": [],
+  "critical_code_review_comments": [
+    "server.py is now 1271 lines (>>700 threshold). Connect endpoints, tip checkout, job CRUD, admin, permits, commission ledger are all in one file. Strongly recommend splitting into routers/connect.py, routers/tips.py, routers/payments.py, routers/jobs.py, routers/admin.py.",
+    "server.py get_connect_status (L806-842): on every call, synchronously calls stripe.Account.retrieve and writes charges_enabled/payouts_enabled/details_submitted into mongo. This is correct for source-of-truth, but it's a stripe API call on every /billing page load. Consider caching for ~30s or switching to a webhook-driven sync (account.updated event).",
+    "server.py create_tip_checkout (L620-720): 'use_connect' branch reads driver.stripe_account_id + driver.stripe_charges_enabled from mongo (which can lag reality). Status endpoint re-syncs on each call, but tip endpoint does not. If a driver's Stripe account is later disabled, the tip endpoint could still attempt destination charge and return 400. Acceptable — Stripe will reject — but consider surfacing 'payouts paused' message to tipper instead of raw Stripe error.",
+    "BillingPage.js (L42): GET /driver/connect/status is called on every mount. On slow connections this serializes with the other 3 parallel calls and can add noticeable latency. Minor.",
+    "BillingPage.js (L63): `window.location.href = r.data.url` — consider using window.location.assign for better back-button semantics.",
+    "server.py start_connect_onboarding (L764-804): catches stripe.error.StripeError only; if the DB update_one fails after a successful Stripe account creation, a new Account exists in Stripe but not persisted locally → next onboarding call creates a duplicate. Consider wrapping in try/except with Stripe.Account.delete rollback, or creating the DB record first with a placeholder then patching."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_stripe_connect.py (new)"
+  ],
+  "success_rate": {"backend": "100% (16/16 pytest)", "frontend": "100% (all 3 UI states + onboarding redirect flow + dashboard window.open verified)"},
+  "test_credentials": "Admin: gabrielosmanhamza@yahoo.com / Admin@123 | Driver: driver1@test.com / Driver@123 (both working)",
+  "seed_data_creation": "Transient: 1 TEST_CONN_trip job (admin-created, driver-accepted, driver-completed), 2 payment_transactions (tip fallback + 1 pending initiated), 3 Stripe Express accounts (acct_1TNm5X3wbIT40a1Z, acct_1TNm643JyCiW1qEq, acct_1TNm6mQLqNetGjdY). ALL cleaned: jobs/payment_transactions/earnings deleted from mongo; all 3 Stripe accounts deleted via stripe.Account.delete; driver1 stripe_* fields unset in mongo. Verified with mongosh — driver1 doc has no stripe_account_id.",
+  "retest_needed": false,
+  "main_agent_can_self_test": true,
+  "context_for_next_testing_agent": "Stripe Connect backend + frontend is fully working. Regression suite at /app/backend/tests/test_stripe_connect.py uses the real sk_test_51TNle0... key and creates real Stripe Express accounts — teardown fixture deletes them via stripe.Account.delete. Important: GET /driver/connect/status always re-syncs from Stripe and OVERWRITES the local stripe_charges_enabled flag — so to test the 'Active' UI badge you must either (a) complete real Stripe hosted onboarding, or (b) use page.route to mock the /status response (what this iteration did). For the Connect-routed tip path, setting stripe_charges_enabled=true in mongo works ONLY until the next /status call rewrites it; the test_stripe_connect.py fake-acct test posts to /tips/checkout before calling /status and expects 400 from Stripe — this is green. Admin login returns 'access_token' (not 'token'). JobCreate payload requires: title, pickup_address, delivery_address, pickup_city, delivery_city, goods_type, urgency, estimated_distance_km, offered_price (+ optional temperature_controlled, notes).",
+  "flows_verified": [
+    "RBAC: GET /api/driver/connect/status without token → 401/403",
+    "RBAC: POST /api/driver/connect/onboard without token → 401/403",
+    "RBAC: POST /api/driver/connect/login-link without token → 401/403",
+    "GET /api/driver/connect/status (driver, no acct) → {connected:false, charges_enabled:false, payouts_enabled:false, details_submitted:false, account_id:null}",
+    "POST /api/driver/connect/login-link (no acct) → 400",
+    "POST /api/driver/connect/onboard (country=CA, capabilities card_payments+transfers) → 200 with {url, account_id}; url contains stripe.com; account_id starts with acct_; persisted on user with stripe_charges_enabled=false",
+    "POST /api/driver/connect/onboard again → same account_id (reuse, no duplicate); returns fresh account_link URL",
+    "GET /api/driver/connect/status after onboard → {connected:true, charges_enabled:false, account_id:acct_..., requirements.currently_due:list}",
+    "POST /api/driver/connect/login-link after onboard → 200 (connect.stripe.com) or 400 (details not submitted) — both valid per Stripe state",
+    "POST /api/tips/checkout/{job_id} — driver charges_enabled=false → fallback, routed_to_driver:false, payment_transactions.connect_routed:false",
+    "POST /api/tips/checkout/{job_id} — fake acct_ + charges_enabled=true → 400 Stripe error (confirms Connect branch is taken)",
+    "POST /api/tips/checkout/{job_id} — no stripe_account_id → fallback, routed_to_driver:false",
+    "Regression: GET /api/admin/stats, /api/driver/balance, /api/permits, /api/driver/tips all 200",
+    "FE /billing unconnected: 'stripe-connect-card' renders with grey 'Not Connected' badge + 'Connect Stripe' stripe-connect-btn",
+    "FE /billing click 'Connect Stripe' → POST /driver/connect/onboard fires, backend persists acct, redirect URL is stripe.com",
+    "FE /billing?stripe_return=1 → 'Stripe onboarding complete' toast + URL param stripped",
+    "FE /billing connected-but-incomplete (charges_enabled=false): amber 'Onboarding Incomplete' badge + 'Finish Onboarding' button, no stripe-dashboard-btn",
+    "FE /billing Active (charges_enabled=true via route mock): green 'Active' badge + 'Stripe Dashboard' button, no stripe-connect-btn. Click opens login-link URL via window.open(url, '_blank', 'noopener,noreferrer')"
+  ],
+  "rca of the issue": "No bugs. All 14 spec items green."
+}
