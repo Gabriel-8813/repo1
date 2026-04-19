@@ -10,7 +10,7 @@ import { Progress } from '../components/ui/progress';
 import { 
   Truck, MapPin, DollarSign, CheckCircle, Clock, 
   AlertTriangle, ArrowRight, FileText, User, LogOut,
-  Briefcase, TrendingUp, Shield
+  Briefcase, TrendingUp, Shield, Heart
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -25,6 +25,7 @@ const DashboardPage = () => {
   const [permits, setPermits] = useState({});
   const [requiredPermits, setRequiredPermits] = useState([]);
   const [balance, setBalance] = useState({ owed: 0, paid: 0, entries: [] });
+  const [tips, setTips] = useState({ total: 0, count: 0 });
   const [loading, setLoading] = useState(true);
 
   // Real-time polling for urgent/emergency jobs — fires toast when new ones appear
@@ -43,13 +44,14 @@ const DashboardPage = () => {
   const fetchData = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes, balanceRes] = await Promise.all([
+      const [statsRes, availableRes, myJobsRes, permitsRes, allPermitsRes, balanceRes, tipsRes] = await Promise.all([
         axios.get(`${API}/earnings/stats`, { headers }),
         axios.get(`${API}/jobs/available`, { headers }),
         axios.get(`${API}/jobs/my`, { headers }),
         axios.get(`${API}/driver/permits`, { headers }),
         axios.get(`${API}/permits`, { headers }),
-        axios.get(`${API}/driver/balance`, { headers })
+        axios.get(`${API}/driver/balance`, { headers }),
+        axios.get(`${API}/driver/tips`, { headers })
       ]);
       
       setStats(statsRes.data);
@@ -58,6 +60,7 @@ const DashboardPage = () => {
       setPermits(permitsRes.data.permits || {});
       setRequiredPermits(allPermitsRes.data.permits.filter(p => p.required));
       setBalance(balanceRes.data);
+      setTips(tipsRes.data);
     } catch (error) {
       console.error('Failed to fetch data:', error);
     } finally {
@@ -204,7 +207,7 @@ const DashboardPage = () => {
         )}
 
         {/* Stats Grid */}
-        <div className="grid md:grid-cols-4 gap-6 mb-8">
+        <div className="grid md:grid-cols-3 xl:grid-cols-5 gap-6 mb-8">
           <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
             <CardContent className="p-6">
               <div className="flex items-center justify-between mb-4">
@@ -244,6 +247,21 @@ const DashboardPage = () => {
               <p className="font-archivo font-black text-3xl text-slate-900">
                 ${stats.this_month.toFixed(2)}
               </p>
+            </CardContent>
+          </Card>
+
+          <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+            <CardContent className="p-6">
+              <div className="flex items-center justify-between mb-4">
+                <div className="w-12 h-12 bg-pink-100 rounded-xl flex items-center justify-center">
+                  <Heart className="w-6 h-6 text-pink-600" />
+                </div>
+              </div>
+              <p className="text-sm text-slate-500 mb-1">Tips Received</p>
+              <p className="font-archivo font-black text-3xl text-slate-900" data-testid="dashboard-tips-total">
+                ${tips.total.toFixed(2)}
+              </p>
+              <p className="text-xs text-slate-400 mt-1">{tips.count} tip{tips.count === 1 ? '' : 's'} · 100% yours</p>
             </CardContent>
           </Card>
 
