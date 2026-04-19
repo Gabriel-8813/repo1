@@ -72,6 +72,13 @@ Build an app for medical transportation that people can register and pay a month
 - **Frontend**: New `useUrgentJobAlerts` hook (15s polling) wired into Dashboard + Jobs pages. On newly posted urgent/emergency jobs: sonner toast (red for emergency, amber for urgent) + red "Urgent Jobs" banner on Dashboard with Dismiss / View All buttons.
 - **Bug fix**: `/api/jobs/{id}/cancel` now returns 400 for cancelling an open job (was 403).
 - **Tested**: 10/10 backend pytest + 10/10 frontend Playwright — zero issues.
+
+### Tip Your Driver (Feb 19 2026)
+- **Public endpoints** (no auth): `GET /api/tips/info/{job_id}`, `POST /api/tips/checkout/{job_id}`, `GET /api/tips/status/{session_id}`
+- **Authed endpoint**: `GET /api/driver/tips` — list + total of tips received
+- **Revenue model**: 100% of tip → driver earnings (no platform commission on tips). Credited to `earnings` collection with `type='tip'` on Stripe paid confirmation. Idempotent via `payment_session_id` check.
+- **Frontend**: New public `/tip/:jobId` page with 15/20/25% presets + custom, optional tipper name, Stripe Checkout redirect, thank-you screen on success. JobsPage adds "Share Tip Link" button on completed jobs (copies URL). Dashboard has new "Tips Received" stat card; grid expanded to 5 cols on xl.
+- **Tested**: 13/13 backend pytest + 16/17 frontend Playwright — zero issues.
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
