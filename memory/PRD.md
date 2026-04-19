@@ -86,6 +86,11 @@ Build an app for medical transportation that people can register and pay a month
 - **Tip routing**: `POST /api/tips/checkout` now uses Stripe **destination charges** (`transfer_data.destination`) when the driver has `stripe_charges_enabled=true`. Response includes `routed_to_driver:true`, `stripe_account_id`. Fallback to emergent Checkout when driver is not yet onboarded.
 - **Frontend**: New "Stripe Payouts" card on `/billing` with three states — Not Connected (blue "Connect Stripe" CTA) / Onboarding Incomplete (amber "Finish Onboarding") / Active (green badge + "Stripe Dashboard" button that opens one-time login link). Return-URL handler toasts success when driver comes back from Stripe.
 - **Tested**: 16/16 backend pytest + 3/3 frontend UI states — zero issues.
+
+### Driver Ratings & Reviews (Feb 19 2026)
+- **Backend**: New `reviews` collection. Public endpoints `GET /api/reviews/info/{job_id}`, `POST /api/reviews/{job_id}` (1-5 stars, optional comment + reviewer name; one review per trip; completed-trip only). `GET /api/drivers/{id}/reviews` for public driver rating page. `GET /api/driver/reviews` for driver's own feed. Admin moderation: `GET /api/admin/reviews`, `POST /api/admin/reviews/{id}/hide` (soft), `DELETE /api/admin/reviews/{id}` (hard).
+- **Frontend**: New public `/rate/:jobId` page with interactive `StarRating` component + comment + reviewer name. Tip page success screen now shows a post-tip rating prompt; main tip view has a "Don't want to tip? Rate X instead" fallback link. Dashboard has new "Your Rating" stat card (★ avg + review count). Admin dashboard has new **Reviews** tab with hide (EyeOff) + delete (confirm AlertDialog) actions.
+- **Tested**: 23/23 backend pytest + 7/7 frontend Playwright flows — zero issues.
 - `/api/fees/agreement` - Platform fee structure
 - `/api/earnings` - Driver earnings
 - `/api/earnings/stats` - Earnings statistics
