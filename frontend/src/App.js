@@ -15,6 +15,8 @@ import BillingPage from "./pages/BillingPage";
 import AdminDashboardPage from "./pages/AdminDashboardPage";
 import TipPage from "./pages/TipPage";
 import RatePage from "./pages/RatePage";
+import ForgotPasswordPage from "./pages/ForgotPasswordPage";
+import ResetPasswordPage from "./pages/ResetPasswordPage";
 
 // Protected Route Component
 const ProtectedRoute = ({ children }) => {
@@ -79,6 +81,8 @@ function AppRoutes() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/tip/:jobId" element={<TipPage />} />
       <Route path="/rate/:jobId" element={<RatePage />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+      <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 
         path="/login" 
         element={

@@ -12,6 +12,9 @@ from datetime import datetime, timezone, timedelta
 import bcrypt
 import jwt
 import stripe
+import resend
+import asyncio
+import hashlib
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 ROOT_DIR = Path(__file__).parent
@@ -30,6 +33,13 @@ JWT_EXPIRATION_HOURS = 24
 # Stripe Config
 STRIPE_API_KEY = os.environ.get('STRIPE_API_KEY')
 stripe.api_key = STRIPE_API_KEY
+
+# Resend (email)
+RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
+SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev').strip()
+RESET_LINK_BASE_URL = os.environ.get('RESET_LINK_BASE_URL', '').rstrip('/')
+if RESEND_API_KEY:
+    resend.api_key = RESEND_API_KEY
 
 # Admin Config
 ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', '').lower().strip()
@@ -125,6 +135,13 @@ class UserLogin(BaseModel):
 
 class PasswordChange(BaseModel):
     current_password: str
+    new_password: str
+
+class PasswordResetRequest(BaseModel):
+    email: EmailStr
+
+class PasswordResetConfirm(BaseModel):
+    token: str
     new_password: str
 
 class UserResponse(BaseModel):
@@ -379,6 +396,103 @@ async def change_password(payload: PasswordChange, current_user: dict = Depends(
         {"$set": {"password_hash": hash_password(payload.new_password)}}
     )
     return {"status": "ok", "message": "Password updated"}
+
+# ======================
+# Forgot / Reset Password
+# ======================
+RESET_TOKEN_EXPIRY_HOURS = 1
+
+def _render_reset_email(full_name: str, reset_link: str) -> str:
+    safe_name = (full_name or "there").split(" ")[0]
+    return f"""<!DOCTYPE html>
+<html><body style="font-family:-apple-system,Segoe UI,Arial,sans-serif;background:#f8fafc;margin:0;padding:40px 20px;">
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" style="max-width:520px;width:100%;background:#ffffff;border-radius:16px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+    <tr><td style="padding:32px 32px 16px;text-align:left;">
+      <div style="display:inline-block;width:40px;height:40px;background:#2563eb;border-radius:8px;vertical-align:middle;"></div>
+      <span style="font-family:-apple-system,Segoe UI,Arial;font-weight:700;font-size:20px;color:#0f172a;margin-left:10px;vertical-align:middle;">MediTrans</span>
+    </td></tr>
+    <tr><td style="padding:0 32px;">
+      <h1 style="font-size:24px;color:#0f172a;margin:8px 0 16px;">Reset your password</h1>
+      <p style="color:#475569;font-size:15px;line-height:1.55;">Hi {safe_name}, we got a request to reset your MediTrans password. Click the button below to set a new one. This link expires in {RESET_TOKEN_EXPIRY_HOURS} hour.</p>
+      <p style="text-align:center;margin:28px 0;">
+        <a href="{reset_link}" style="background:#2563eb;color:#ffffff;text-decoration:none;padding:14px 28px;border-radius:999px;font-weight:600;display:inline-block;">Reset Password</a>
+      </p>
+      <p style="color:#64748b;font-size:13px;line-height:1.5;">If the button doesn't work, copy this link into your browser:<br><a href="{reset_link}" style="color:#2563eb;word-break:break-all;">{reset_link}</a></p>
+      <p style="color:#94a3b8;font-size:12px;margin-top:24px;border-top:1px solid #e2e8f0;padding-top:16px;">Didn't request this? You can safely ignore this email — your password won't change unless you click the link above.</p>
+    </td></tr>
+    <tr><td style="padding:24px 32px;color:#94a3b8;font-size:12px;text-align:center;">MediTrans Ontario — medical transport for professionals.</td></tr>
+  </table>
+</body></html>"""
+
+@api_router.post("/auth/forgot-password")
+async def forgot_password(req: PasswordResetRequest, request: Request):
+    """Request a password-reset email. Always returns 200 regardless of whether the email
+    exists, to prevent user enumeration."""
+    user = await db.users.find_one({"email": req.email.lower().strip()}, {"_id": 0})
+    if not user:
+        # Don't leak whether the email is registered
+        return {"status": "ok", "message": "If the email is registered, a reset link has been sent."}
+
+    # Sign a short-lived JWT bound to the user's current password_hash — this means once the
+    # user resets their password, the token automatically becomes invalid (single-use in practice).
+    ph_checksum = hashlib.sha256(user["password_hash"].encode()).hexdigest()[:16]
+    token = jwt.encode({
+        "user_id": user["id"],
+        "purpose": "password_reset",
+        "ph": ph_checksum,
+        "exp": datetime.now(timezone.utc) + timedelta(hours=RESET_TOKEN_EXPIRY_HOURS)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+
+    # Prefer explicit env; fallback to the request origin
+    origin = RESET_LINK_BASE_URL or str(request.headers.get("origin", "")).rstrip('/') or str(request.base_url).rstrip('/')
+    reset_link = f"{origin}/reset-password?token={token}"
+
+    if not RESEND_API_KEY:
+        # No provider configured — log and still return 200 so the flow keeps working
+        logger.warning(f"[forgot-password] RESEND_API_KEY not set; reset link for {user['email']}: {reset_link}")
+        return {"status": "ok", "message": "If the email is registered, a reset link has been sent.",
+                "dev_reset_link": reset_link}
+
+    try:
+        params = {
+            "from": SENDER_EMAIL,
+            "to": [user["email"]],
+            "subject": "Reset your MediTrans password",
+            "html": _render_reset_email(user.get("full_name", ""), reset_link)
+        }
+        result = await asyncio.to_thread(resend.Emails.send, params)
+        logger.info(f"[forgot-password] reset email sent to {user['email']} (id={result.get('id')})")
+    except Exception as e:
+        logger.error(f"[forgot-password] Resend error: {e}")
+        # Don't expose the error to the client
+    return {"status": "ok", "message": "If the email is registered, a reset link has been sent."}
+
+@api_router.post("/auth/reset-password")
+async def reset_password(payload: PasswordResetConfirm):
+    """Consume a reset token and set a new password."""
+    if len(payload.new_password) < 8:
+        raise HTTPException(status_code=400, detail="New password must be at least 8 characters")
+    try:
+        claims = jwt.decode(payload.token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=400, detail="Reset link has expired — request a new one")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=400, detail="Invalid reset link")
+    if claims.get("purpose") != "password_reset":
+        raise HTTPException(status_code=400, detail="Invalid reset link")
+    user = await db.users.find_one({"id": claims.get("user_id")}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=400, detail="User no longer exists")
+    # Single-use: token is bound to the password_hash at issue time. Any successful reset
+    # changes the hash and invalidates outstanding tokens for that user.
+    current_ph_checksum = hashlib.sha256(user["password_hash"].encode()).hexdigest()[:16]
+    if claims.get("ph") != current_ph_checksum:
+        raise HTTPException(status_code=400, detail="Reset link has already been used")
+    await db.users.update_one(
+        {"id": user["id"]},
+        {"$set": {"password_hash": hash_password(payload.new_password)}}
+    )
+    return {"status": "ok", "message": "Password reset successfully"}
 
 # Driver Profile Routes
 @api_router.get("/driver/profile")
