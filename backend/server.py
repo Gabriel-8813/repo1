@@ -2863,6 +2863,131 @@ async def facility_deliveries(current_user: dict = Depends(get_current_user)):
         })
     return {"deliveries": out}
 
+# ---- Facility billing (facility-fee side; separate from driver commission) ----
+HST_RATE = 0.13
+
+async def _facility_statement(user: dict, month: str):
+    if not re.match(r"^\d{4}-\d{2}$", month):
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM")
+    role = user.get("role")
+    if role not in ("facility", "admin", "dispatcher"):
+        raise HTTPException(status_code=403, detail="Facility access required")
+    if role == "facility":
+        fac_ids = await facility_ids_owned_by(user["id"])
+        query = {"$or": [{"posted_by": user["id"]}, {"facility_id": {"$in": fac_ids}}]}
+        facility = await db.facilities.find_one({"owner_user_id": user["id"]}, {"_id": 0})
+    else:
+        query = {}
+        facility = None
+    query = {"$and": [query, {"status": {"$in": ["delivered", "completed"]}}]} if query else {"status": {"$in": ["delivered", "completed"]}}
+    jobs = await db.jobs.find(query, {"_id": 0}).to_list(1000)
+    items = []
+    for j in jobs:
+        done_at = j.get("delivered_at") or j.get("completed_at") or ""
+        if not done_at.startswith(month):
+            continue
+        items.append({
+            "job_id": j["id"],
+            "date": done_at,
+            "title": j.get("title") or "Medical transport",
+            "recipient_name": j.get("recipient_name"),
+            "dropoff_address": j.get("delivery_address"),
+            "amount": round(float(j.get("payout_amount") or j.get("offered_price") or 0), 2)
+        })
+    items.sort(key=lambda i: i["date"])
+    subtotal = round(sum(i["amount"] for i in items), 2)
+    hst = round(subtotal * HST_RATE, 2)
+    return {
+        "month": month,
+        "facility": {"name": facility.get("name"), "address": facility.get("address"), "billing_email": facility.get("billing_email")} if facility else None,
+        "items": items,
+        "subtotal": subtotal,
+        "hst_rate": HST_RATE,
+        "hst": hst,
+        "total": round(subtotal + hst, 2),
+        "currency": "CAD"
+    }
+
+@api_router.get("/facility/billing")
+async def facility_billing(month: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    return await _facility_statement(current_user, month)
+
+@api_router.get("/facility/billing/export")
+async def facility_billing_export(request: Request, month: Optional[str] = None, format: str = "csv", auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    st = await _facility_statement(current_user, month)
+    fname = f"meditrans-statement-{month}"
+    if format == "csv":
+        import io, csv
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["MediTrans Ontario — Facility Statement", st["month"]])
+        if st["facility"]:
+            w.writerow([st["facility"]["name"], st["facility"]["address"], st["facility"]["billing_email"]])
+        w.writerow([])
+        w.writerow(["Date", "Delivery", "Recipient", "Dropoff", "Amount (CAD)"])
+        for i in st["items"]:
+            w.writerow([i["date"][:16].replace("T", " "), i["title"], i["recipient_name"] or "", i["dropoff_address"] or "", f"{i['amount']:.2f}"])
+        w.writerow([])
+        w.writerow(["", "", "", "Subtotal", f"{st['subtotal']:.2f}"])
+        w.writerow(["", "", "", "HST (13%)", f"{st['hst']:.2f}"])
+        w.writerow(["", "", "", "Total", f"{st['total']:.2f}"])
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename={fname}.csv"})
+    elif format == "pdf":
+        def build_pdf():
+            import io
+            from reportlab.lib.pagesizes import letter
+            from reportlab.lib import colors
+            from reportlab.lib.units import inch
+            from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+            from reportlab.lib.styles import getSampleStyleSheet
+            buf = io.BytesIO()
+            doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.7 * inch)
+            styles = getSampleStyleSheet()
+            story = [
+                Paragraph("MediTrans Ontario — Facility Statement", styles["Title"]),
+                Paragraph(f"Statement month: {st['month']}", styles["Normal"]),
+            ]
+            if st["facility"]:
+                story.append(Paragraph(f"{st['facility']['name']} · {st['facility']['address']} · {st['facility']['billing_email']}", styles["Normal"]))
+            story.append(Spacer(1, 14))
+            data = [["Date", "Delivery", "Recipient", "Amount (CAD)"]]
+            for i in st["items"]:
+                data.append([i["date"][:16].replace("T", " "), i["title"], i["recipient_name"] or "", f"${i['amount']:.2f}"])
+            data += [["", "", "Subtotal", f"${st['subtotal']:.2f}"],
+                     ["", "", "HST (13%)", f"${st['hst']:.2f}"],
+                     ["", "", "Total", f"${st['total']:.2f}"]]
+            t = Table(data, colWidths=[1.5 * inch, 2.4 * inch, 1.8 * inch, 1.3 * inch])
+            t.setStyle(TableStyle([
+                ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a8a")),
+                ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                ("FONTSIZE", (0, 0), (-1, -1), 8),
+                ("GRID", (0, 0), (-1, -4), 0.4, colors.HexColor("#cbd5e1")),
+                ("LINEABOVE", (2, -3), (-1, -3), 0.8, colors.HexColor("#1e3a8a")),
+                ("FONTNAME", (2, -1), (-1, -1), "Helvetica-Bold"),
+            ]))
+            story.append(t)
+            doc.build(story)
+            return buf.getvalue()
+        pdf_bytes = await asyncio.to_thread(build_pdf)
+        return Response(content=pdf_bytes, media_type="application/pdf",
+                        headers={"Content-Disposition": f"attachment; filename={fname}.pdf"})
+    raise HTTPException(status_code=422, detail="format must be csv or pdf")
+
 # Health check
 @api_router.get("/")
 async def root():
