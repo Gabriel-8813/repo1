@@ -14,7 +14,7 @@ import {
 } from '../components/ui/alert-dialog';
 import {
   Truck, MapPin, Navigation, PackageCheck, PenLine, CreditCard,
-  CheckCircle2, Undo2, ArrowLeft, Snowflake, ShieldAlert
+  CheckCircle2, Undo2, ArrowLeft, Snowflake, ShieldAlert, XCircle, Clock
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -43,6 +43,8 @@ export default function ActiveDeliveryPage() {
   const [returning, setReturning] = useState(false);
   const [settlement, setSettlement] = useState(null);
   const [gpsUnavailable, setGpsUnavailable] = useState(false);
+  const [fees, setFees] = useState(null);
+  const [nowTick, setNowTick] = useState(Date.now());
   const pingFailsRef = useRef(0);
 
   // Stage 1 checklist
@@ -78,6 +80,39 @@ export default function ActiveDeliveryPage() {
   }, [jobId, token]);
 
   useEffect(() => { fetchJob(); }, [fetchJob]);
+
+  useEffect(() => {
+    axios.get(`${API}/fees/agreement`).then((r) => setFees(r.data.agreement)).catch(() => {});
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const graceRemaining = (() => {
+    if (!fees || !job?.accepted_at) return null;
+    const elapsed = (nowTick - new Date(job.accepted_at).getTime()) / 1000;
+    const graceSeconds = fees.cancellation_grace_minutes * 60;
+    const remaining = Math.min(graceSeconds - elapsed, graceSeconds);
+    return remaining > 0 ? Math.ceil(remaining) : 0;
+  })();
+  const freeCancel = graceRemaining > 0;
+
+  const cancelJob = async () => {
+    setBusy(true);
+    try {
+      const r = await axios.post(`${API}/jobs/${jobId}/cancel`, {}, { headers });
+      localStorage.removeItem(`mt_arrived_${jobId}`);
+      if (r.data.charged) {
+        toast.warning(`Late cancellation — $${r.data.cancellation_fee.toFixed(2)} fee added to your balance`);
+      } else {
+        toast.success('Job cancelled — no fee (within the free window). It returns to the job pool.');
+      }
+      navigate('/jobs');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Failed to cancel');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const isColdChain = job && (job.temperature_controlled || (job.handling_flags || []).includes('cold_chain'));
   const idRequired = job && (job.handling_flags || []).includes('id_required');
@@ -275,6 +310,18 @@ export default function ActiveDeliveryPage() {
 
         {/* STAGE 1: PICKUP */}
         {stage === 1 && (
+          <>
+          {graceRemaining !== null && (
+            <div
+              className={`flex items-center gap-2 rounded-xl px-3 py-2.5 text-sm font-medium border ${freeCancel ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-red-50 border-red-200 text-red-700'}`}
+              data-testid="cancel-window-banner"
+            >
+              <Clock className="w-4 h-4 shrink-0" />
+              {freeCancel
+                ? `Free cancellation for ${Math.floor(graceRemaining / 60)}:${String(graceRemaining % 60).padStart(2, '0')} — after that a $${fees?.cancellation_fee.toFixed(2)} fee applies`
+                : `Free-cancel window over — cancelling now costs $${fees?.cancellation_fee.toFixed(2)}`}
+            </div>
+          )}
           <Card className="border-0 shadow-[0_2px_10px_rgba(0,0,0,0.08)]" data-testid="pickup-stage">
             <CardContent className="p-5">
               <h2 className="font-archivo font-bold text-xl text-slate-900 mb-3">Pick up at facility</h2>
@@ -318,8 +365,33 @@ export default function ActiveDeliveryPage() {
               >
                 <PackageCheck className="w-5 h-5 mr-2" /> {busy ? 'Recording…' : 'Confirm Pickup'}
               </Button>
+
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" className="w-full h-12 rounded-full mt-3 text-red-600 border-red-200 hover:bg-red-50" data-testid="cancel-delivery-btn">
+                    <XCircle className="w-4 h-4 mr-2" /> Cancel this job {freeCancel ? '(free)' : `($${fees?.cancellation_fee?.toFixed(2)} fee)`}
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Cancel this job?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      {freeCancel
+                        ? `You're within the ${fees?.cancellation_grace_minutes}-minute free window — no fee. The job returns to the pool for other drivers.`
+                        : `The free-cancel window has expired. A $${fees?.cancellation_fee?.toFixed(2)} late-cancellation fee will be added to your balance and logged.`}
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Keep Job</AlertDialogCancel>
+                    <AlertDialogAction onClick={cancelJob} className="bg-red-600 hover:bg-red-700" data-testid="confirm-cancel-delivery-btn">
+                      Cancel Job
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
             </CardContent>
           </Card>
+          </>
         )}
 
         {/* STAGE 2: IN TRANSIT */}

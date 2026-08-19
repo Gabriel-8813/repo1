@@ -169,6 +169,12 @@ Build an app for medical transportation that people can register and pay a month
 - GPS optional (denied → events store null + UI "location unavailable" warning); aria-labels on recipient inputs
 - **Tested**: iteration_12 — 18 new pytest (tests/test_active_delivery.py, self-seeding), full suite 156/156; complete mobile Playwright E2E of both happy path (delivered w/ signature, settlement $42.50/−$8.50/net $34) and exception path (returned + notifications). Two demo open jobs re-seeded on the board
 
+### Cancellation Rules on Accepted Jobs (June 2026)
+- Rules (already in backend, now verified + surfaced): cancel within 5 min of accepted_at = free, job returns to the open/offered pool; after 5 min = $15 late-cancellation fee added to the driver's ledger (type=cancellation_fee, owed) + audit log. Fees configurable via admin (cancellation_fee / cancellation_grace_minutes)
+- **Tightened**: cancel now only allowed pre-pickup (status accepted/in_progress) — after pickup_confirmed the item must be delivered or returned (400 with clear message); JobsPage hides Cancel for picked_up/in_transit jobs
+- **Active Delivery screen**: live 1s countdown banner on Stage 1 ("Free cancellation for 4:39 — after that a $15.00 fee applies", turns red when expired) + Cancel button with fee-aware confirm dialog
+- Self-tested: UI countdown ticking + free cancel (returns to pool), late cancel via backdated accepted_at (charged=true, $15 ledger entry), post-pickup 400 block; regression 64/64 (commission + active delivery + RBAC suites)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
