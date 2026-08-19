@@ -37,3 +37,10 @@ Notes: Any user created with the email in `ADMIN_EMAIL` (backend/.env) is auto-p
 - Drivers with no approved driver record (verification_status != approved) get 403 on `POST /api/jobs/{id}/accept` and cannot be assigned via `PUT /api/jobs/{id}`.
 - Drivers cannot `POST /api/jobs` (403). Facilities/dispatchers/admins can.
 - `GET /api/audit-logs` requires admin or dispatcher role.
+
+## Demo accounts for app-store reviewers (seeded via /app/backend/seed_demo_accounts.py — idempotent, safe to re-run)
+- Driver: `demo.driver@meditrans.ca` / `DemoDriver#2026` (approved, all credentials valid, insurance valid 1 year, cold-chain certified)
+- Facility: `demo.facility@meditrans.ca` / `DemoFacility#2026` (owns approved "Demo Medical Clinic", Toronto)
+- Dispatcher: `demo.dispatcher@meditrans.ca` / `DemoDispatch#2026`
+- Admin: `demo.admin@meditrans.ca` / `DemoAdmin#2026`
+All demo accounts have privacy policy pre-accepted.

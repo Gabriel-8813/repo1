@@ -262,6 +262,13 @@ Build an app for medical transportation that people can register and pay a month
 - Tested: iteration 22 frontend regression — 5/5 role flows pass, 0 console errors; all flagged a11y issues fixed (focus visibility, contrast, off-palette badges)
 - Remaining design nit (P3): native date/month inputs instead of shadcn calendar (pre-existing)
 
+### Pre-Launch Cleanup (June 2026)
+- Footer: dynamic © year, new Legal column linking /privacy + /terms; TermsPage created (Ontario governing law, fees, driver obligations, prohibited use)
+- Removed unverifiable claim "Join hundreds of drivers already delivering…" → verifiable credential-verification copy
+- Routing confirmed: Start Driving → /register (driver signup → /onboarding); Book Transport → /facility portal (login-gated)
+- Reviewer demo accounts seeded (idempotent /app/backend/seed_demo_accounts.py, in test_credentials.md): demo.driver/facility/dispatcher/admin@meditrans.ca — driver fully approved w/ 1-yr insurance + cold-chain, facility owns approved Demo Medical Clinic, all privacy pre-accepted; all 4 logins verified via API
+- Self-tested via curl + screenshots (footer, terms page, demo logins)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

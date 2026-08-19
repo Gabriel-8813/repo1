@@ -248,8 +248,7 @@ const LandingPage = () => {
             Ready to Start Earning?
           </h2>
           <p className="text-slate-300 text-lg mb-8 max-w-2xl mx-auto">
-            Join hundreds of drivers already delivering medical supplies across Ontario. 
-            Complete your registration in minutes.
+            Complete your driver registration in minutes. Every driver is credential-verified before their first medical delivery.
           </p>
           <Button 
             size="lg"
@@ -265,7 +264,7 @@ const LandingPage = () => {
       {/* Footer */}
       <footer className="py-12 px-6 bg-slate-900 text-white">
         <div className="max-w-7xl mx-auto">
-          <div className="grid md:grid-cols-4 gap-8">
+          <div className="grid md:grid-cols-5 gap-8">
             <div>
               <div className="flex items-center gap-2 mb-4">
                 <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
@@ -293,6 +292,13 @@ const LandingPage = () => {
               </ul>
             </div>
             <div>
+              <h4 className="font-semibold mb-4">Legal</h4>
+              <ul className="space-y-2 text-slate-400 text-sm">
+                <li><a href="/privacy" className="hover:text-white transition-colors" data-testid="footer-privacy-link">Privacy Policy</a></li>
+                <li><a href="/terms" className="hover:text-white transition-colors" data-testid="footer-terms-link">Terms of Service</a></li>
+              </ul>
+            </div>
+            <div>
               <h4 className="font-semibold mb-4">Contact</h4>
               <ul className="space-y-2 text-slate-400 text-sm">
                 <li>support@meditrans.ca</li>
@@ -301,7 +307,7 @@ const LandingPage = () => {
             </div>
           </div>
           <div className="border-t border-slate-800 mt-8 pt-8 text-center text-slate-400 text-sm">
-            © 2024 MediTrans Ontario. All rights reserved.
+            © {new Date().getFullYear()} MediTrans Ontario. All rights reserved.
           </div>
         </div>
       </footer>

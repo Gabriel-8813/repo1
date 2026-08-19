@@ -20,6 +20,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FacilityHomePage from "./pages/FacilityHomePage";
 import ConfirmDeliveryPage from "./pages/ConfirmDeliveryPage";
 import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
+import TermsPage from "./pages/TermsPage";
 import { PrivacyGate } from "./components/PrivacyGate";
 import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
@@ -131,6 +132,7 @@ function AppRoutes() {
       <Route path="/rate/:jobId" element={<RatePage />} />
       <Route path="/confirm/:token" element={<ConfirmDeliveryPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
+      <Route path="/terms" element={<TermsPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 
