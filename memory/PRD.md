@@ -193,6 +193,12 @@ Build an app for medical transportation that people can register and pay a month
 - **Proof of Delivery dialog** on delivered jobs: recipient name + relationship, delivery timestamp, GPS, and the signature/ID evidence image (served via /api/delivery-evidence with facility-owner access)
 - Self-tested: curl (scoping, 403 for driver, driver/rating/last_event enrichment) + desktop UI screenshot (trackers, driver 5.0(4) chip, returned banner, POD dialog with evidence image rendering)
 
+### Facility Billing Tab (June 2026)
+- **GET /api/facility/billing?month=YYYY-MM** (facility own-jobs only; staff all; driver 403): delivered/completed jobs in month → line items (date, title, recipient, dropoff, amount=payout charge), subtotal, HST 13%, total. This is the facility-fee revenue side, fully separate from driver-commission ledger
+- **GET /api/facility/billing/export?month=&format=csv|pdf** (supports ?auth= token for browser downloads): CSV with header/footer rows; PDF invoice via reportlab (added to requirements.txt)
+- **Portal now has tabs**: "Book & Track" (form + My Deliveries dashboard) and "Billing" (month picker, statement table with subtotal/HST/total footer, CSV + PDF export buttons)
+- Self-tested: HST math asserted ($42.50 → $5.53 → $48.03), CSV content, valid %PDF-1.4 output, driver 403, UI screenshot of the tab
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

@@ -7,7 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage } from 'lucide-react';
+import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage, Receipt, Download } from 'lucide-react';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { toast } from 'sonner';
 
@@ -56,6 +57,20 @@ export default function FacilityHomePage() {
   const [form, setForm] = useState(emptyForm);
   const [setup, setSetup] = useState({ name: '', type: 'pharmacy', address: '', contact_name: '', contact_phone: '', billing_email: '' });
   const [busy, setBusy] = useState(false);
+  const [billMonth, setBillMonth] = useState(new Date().toISOString().slice(0, 7));
+  const [statement, setStatement] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    axios.get(`${API}/facility/billing?month=${billMonth}`, { headers })
+      .then((r) => setStatement(r.data))
+      .catch(() => setStatement(null));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [billMonth, token, deliveries.length]);
+
+  const exportStatement = (fmt) => {
+    window.open(`${API}/facility/billing/export?month=${billMonth}&format=${fmt}&auth=${token}`, '_blank');
+  };
 
   const load = useCallback(async () => {
     try {
@@ -162,7 +177,14 @@ export default function FacilityHomePage() {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid lg:grid-cols-5 gap-8">
+          <Tabs defaultValue="book">
+            <TabsList className="mb-6 h-11">
+              <TabsTrigger value="book" className="h-9 px-6" data-testid="tab-book">Book & Track</TabsTrigger>
+              <TabsTrigger value="billing" className="h-9 px-6" data-testid="tab-billing"><Receipt className="w-4 h-4 mr-1" /> Billing</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="book">
+            <div className="grid lg:grid-cols-5 gap-8">
             {/* Booking form */}
             <div className="lg:col-span-3">
               <h1 className="font-archivo font-bold text-2xl text-slate-900 mb-4">Book Transport</h1>
@@ -303,6 +325,61 @@ export default function FacilityHomePage() {
               )}
             </div>
           </div>
+            </TabsContent>
+
+            <TabsContent value="billing">
+              <div className="max-w-3xl" data-testid="billing-tab">
+                <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+                  <h2 className="font-archivo font-bold text-2xl text-slate-900">Monthly Statement</h2>
+                  <div className="flex items-center gap-2">
+                    <Input type="month" value={billMonth} onChange={(e) => setBillMonth(e.target.value)} className="h-9 w-40" data-testid="billing-month-input" />
+                    <Button size="sm" variant="outline" className="rounded-full" onClick={() => exportStatement('csv')} data-testid="export-csv-btn">
+                      <Download className="w-4 h-4 mr-1" /> CSV
+                    </Button>
+                    <Button size="sm" variant="outline" className="rounded-full" onClick={() => exportStatement('pdf')} data-testid="export-pdf-btn">
+                      <Download className="w-4 h-4 mr-1" /> PDF
+                    </Button>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500 mb-4">Delivery charges billed to your facility (separate from driver commissions).</p>
+                {!statement ? (
+                  <Card className="border-0 shadow-sm"><CardContent className="py-10 text-center text-slate-500 text-sm">Loading statement…</CardContent></Card>
+                ) : statement.items.length === 0 ? (
+                  <Card className="border-0 shadow-sm"><CardContent className="py-10 text-center text-slate-500 text-sm">No completed deliveries in {billMonth}.</CardContent></Card>
+                ) : (
+                  <Card className="border-0 shadow-md">
+                    <CardContent className="p-0">
+                      <table className="w-full text-sm" data-testid="billing-table">
+                        <thead>
+                          <tr className="text-left text-[11px] uppercase tracking-wide text-slate-400 border-b border-slate-100">
+                            <th className="px-4 py-3">Date</th>
+                            <th className="px-4 py-3">Delivery</th>
+                            <th className="px-4 py-3 hidden sm:table-cell">Recipient</th>
+                            <th className="px-4 py-3 text-right">Charge</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {statement.items.map((i) => (
+                            <tr key={i.job_id} className="border-b border-slate-50" data-testid={`billing-row-${i.job_id}`}>
+                              <td className="px-4 py-2.5 text-slate-500 text-xs">{new Date(i.date).toLocaleDateString('en-CA', { month: 'short', day: 'numeric' })}</td>
+                              <td className="px-4 py-2.5 text-slate-800">{i.title}</td>
+                              <td className="px-4 py-2.5 text-slate-500 hidden sm:table-cell">{i.recipient_name || '—'}</td>
+                              <td className="px-4 py-2.5 text-right font-medium text-slate-900">${i.amount.toFixed(2)}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                        <tfoot>
+                          <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">Subtotal</td><td className="px-4 py-2 text-right font-medium" data-testid="billing-subtotal">${statement.subtotal.toFixed(2)}</td></tr>
+                          <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">HST (13%)</td><td className="px-4 py-2 text-right font-medium" data-testid="billing-hst">${statement.hst.toFixed(2)}</td></tr>
+                          <tr className="border-t border-slate-200"><td colSpan="3" className="px-4 py-3 text-right font-archivo font-bold text-slate-900">Total (CAD)</td><td className="px-4 py-3 text-right font-archivo font-bold text-lg" data-testid="billing-total">${statement.total.toFixed(2)}</td></tr>
+                        </tfoot>
+                      </table>
+                    </CardContent>
+                  </Card>
+                )}
+              </div>
+            </TabsContent>
+          </Tabs>
         )}
       </main>
 
