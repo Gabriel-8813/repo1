@@ -344,7 +344,7 @@ export default function ActiveDeliveryPage() {
                 </div>
               </div>
               <a href={mapsUrl(job.pickup_address)} target="_blank" rel="noreferrer">
-                <Button variant="outline" className="w-full h-12 rounded-full mb-5" data-testid="navigate-pickup-btn">
+                <Button variant="outline" className="w-full h-14 rounded-full mb-5" data-testid="navigate-pickup-btn">
                   <Navigation className="w-4 h-4 mr-2" /> Navigate to pickup
                 </Button>
               </a>
@@ -378,7 +378,7 @@ export default function ActiveDeliveryPage() {
 
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="outline" className="w-full h-12 rounded-full mt-3 text-red-600 border-red-200 hover:bg-red-50" data-testid="cancel-delivery-btn">
+                  <Button variant="outline" className="w-full h-14 rounded-full mt-3 text-red-600 border-red-200 hover:bg-red-50" data-testid="cancel-delivery-btn">
                     <XCircle className="w-4 h-4 mr-2" /> Cancel this job {freeCancel ? '(free)' : `($${fees?.cancellation_fee?.toFixed(2)} fee)`}
                   </Button>
                 </AlertDialogTrigger>
@@ -419,11 +419,11 @@ export default function ActiveDeliveryPage() {
                 </div>
               </div>
               <a href={mapsUrl(job.delivery_address)} target="_blank" rel="noreferrer">
-                <Button variant="outline" className="w-full h-12 rounded-full mb-3" data-testid="navigate-dropoff-btn">
+                <Button variant="outline" className="w-full h-14 rounded-full mb-3" data-testid="navigate-dropoff-btn">
                   <Navigation className="w-4 h-4 mr-2" /> Navigate to dropoff
                 </Button>
               </a>
-              <Button variant="outline" className="w-full h-12 rounded-full mb-4 text-blue-700 border-blue-200 hover:bg-blue-50" disabled={arrivingSent} onClick={sendArrivingSoon} data-testid="arriving-soon-btn">
+              <Button variant="outline" className="w-full h-14 rounded-full mb-4 text-blue-700 border-blue-200 hover:bg-blue-50" disabled={arrivingSent} onClick={sendArrivingSoon} data-testid="arriving-soon-btn">
                 <Bell className="w-4 h-4 mr-2" /> {arrivingSent ? 'Recipient notified' : 'Notify recipient — arriving soon'}
               </Button>
               <Button className="w-full h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-semibold" onClick={() => { setArrived(true); localStorage.setItem(`mt_arrived_${jobId}`, '1'); }} data-testid="arrived-btn">
@@ -476,7 +476,7 @@ export default function ActiveDeliveryPage() {
               ) : (
                 <div className="mb-4">
                   <input ref={idInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={(e) => setIdPhoto(e.target.files?.[0] || null)} data-testid="id-photo-input" />
-                  <Button variant="outline" className="w-full h-12 rounded-full" onClick={() => idInputRef.current?.click()} data-testid="capture-id-btn">
+                  <Button variant="outline" className="w-full h-14 rounded-full" onClick={() => idInputRef.current?.click()} data-testid="capture-id-btn">
                     <CreditCard className="w-4 h-4 mr-2" /> {idPhoto ? `Captured: ${idPhoto.name}` : 'Photograph government ID'}
                   </Button>
                 </div>
@@ -487,7 +487,7 @@ export default function ActiveDeliveryPage() {
                 aria-label="Recipient full name"
                 value={recipientName}
                 onChange={(e) => setRecipientName(e.target.value)}
-                className="h-12 mb-3"
+                className="h-14 text-base mb-3"
                 data-testid="recipient-name-input"
               />
               <label className="flex items-center gap-2 mb-3 cursor-pointer">
@@ -500,7 +500,7 @@ export default function ActiveDeliveryPage() {
                   aria-label="Relationship to patient"
                   value={relationship}
                   onChange={(e) => setRelationship(e.target.value)}
-                  className="h-12 mb-3"
+                  className="h-14 text-base mb-3"
                   data-testid="recipient-relationship-input"
                 />
               )}
@@ -516,7 +516,7 @@ export default function ActiveDeliveryPage() {
 
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button variant="outline" className="w-full h-12 rounded-full mt-3 text-amber-700 border-amber-300 hover:bg-amber-50" data-testid="customer-unavailable-btn">
+                  <Button variant="outline" className="w-full h-14 rounded-full mt-3 text-amber-700 border-amber-300 hover:bg-amber-50" data-testid="customer-unavailable-btn">
                     <ShieldAlert className="w-4 h-4 mr-2" /> Customer Unavailable
                   </Button>
                 </AlertDialogTrigger>
@@ -552,7 +552,7 @@ export default function ActiveDeliveryPage() {
                 </div>
               </div>
               <a href={mapsUrl(job.pickup_address)} target="_blank" rel="noreferrer">
-                <Button variant="outline" className="w-full h-12 rounded-full mb-4 bg-white" data-testid="navigate-return-btn">
+                <Button variant="outline" className="w-full h-14 rounded-full mb-4 bg-white" data-testid="navigate-return-btn">
                   <Navigation className="w-4 h-4 mr-2" /> Navigate back to facility
                 </Button>
               </a>
@@ -577,7 +577,7 @@ export default function ActiveDeliveryPage() {
                   Gross ${settlement.gross_earnings?.toFixed(2)} − commission ${settlement.commission_charged?.toFixed(2)} = <span className="font-bold">net ${settlement.net_earnings?.toFixed(2)}</span>
                 </div>
               )}
-              <Button className="w-full h-12 rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => navigate('/jobs')} data-testid="back-to-board-btn">
+              <Button className="w-full h-14 rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => navigate('/jobs')} data-testid="back-to-board-btn">
                 Back to Job Board
               </Button>
             </CardContent>
@@ -592,7 +592,7 @@ export default function ActiveDeliveryPage() {
               </div>
               <h2 className="font-archivo font-bold text-2xl text-slate-900 mb-2">Item Returned</h2>
               <p className="text-sm text-slate-500 mb-4">The facility and dispatcher were notified. Custody trail closed as returned.</p>
-              <Button className="w-full h-12 rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => navigate('/jobs')} data-testid="back-to-board-btn">
+              <Button className="w-full h-14 rounded-full bg-blue-600 hover:bg-blue-700" onClick={() => navigate('/jobs')} data-testid="back-to-board-btn">
                 Back to Job Board
               </Button>
             </CardContent>

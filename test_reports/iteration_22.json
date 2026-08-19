@@ -1,0 +1,66 @@
+{
+  "summary": "FRONTEND-ONLY visual/functional regression test of the clinical design pass (backend skipped per request). Verified via Playwright at 1920x1080 (+1536x864 ~125% zoom, 20px root font, 390x844 mobile). (1) Landing: renders with new palette; 'Ontario's Medical Transport Network' badge + MediTrans logo present; BOTH pexels images load (6818157 clinical courier 1880x1253, 16669433 Toronto skyline 1880x1253, complete=true, naturalWidth>0); h1 computed font-family = 'Manrope, sans-serif' at 60px, body = 'IBM Plex Sans'; primary buttons computed bg = rgb(3,105,161) = #0369a1 (old #2563eb gone; grep for 2563eb/3b82f6/1d4ed8 in src = 0 hits); --primary = '201 96% 32%'. (2) Driver (driver1@test.com): /jobs renders 3 available jobs, Accept and Decline are exactly 56px tall (h-14) and clickable; accepted job 79fd58a3 -> /delivery/{id} full flow worked end-to-end: Stage 1 Pickup (full address revealed, Confirm Pickup 56px correctly disabled until all 3 checklist boxes ticked) -> Stage 2 In Transit (toast 'Pickup confirmed - custody recorded', dropoff address shown) -> Arrived at dropoff -> Stage 3 Delivery (signature canvas draw + recipient name) -> Mark Delivered -> Delivered summary 'Gross $52.50 - commission $10.50 = net $42.00'; /earnings loads with pay-period card and trip history including the new trip. (3) Facility (facility1@test.com): portal + Book Transport render; booking with both consent checkboxes submitted successfully (toast 'Request created - 2.7 km, driver payout $25.00'), appeared in My Deliveries with plaintext recipient; Billing tab renders statement table (subtotal $120.00, HST $15.60, total $135.60). (4) Dispatcher (dispatcher1@test.com): /dispatch renders all 7 columns (open-pool, offered, accepted, picked-up, in-transit, delivered, exceptions), 7 board cards, job dialog opens with status/route/payout + chain-of-custody section, assign flow works (toast 'Job offered to driver', card moved Open Pool -> Offered). (5) Admin: Users (7 rows), Drivers (badges + Review), Facilities, Revenue (4 tables, CSV buttons), Compliance (residency card, audit-integrity card, audit log) all render with correct styling, no unstyled/overlapping content. (6) ZERO console errors on all 5 main pages. (7) Layout robustness: no horizontal scroll and no clipped/overflowing elements at 1536px-wide viewport (=125% zoom of 1920), at 20px root font, or at 390px mobile (accept buttons still 56px). Issues found are a11y/design only: keyboard focus indicator on buttons/inputs is effectively invisible (RCA below) and several slate-400 micro-copy strings fail WCAG AA contrast, which contradicts the stated AA goal of the design pass.",
+  "backend_issues": {"critical": [], "minor": []},
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Global (button.jsx / input.jsx) - keyboard focus visibility",
+        "issues": [
+          "The new global rule `*:focus-visible { outline: 2px solid #0369a1 }` in index.css NEVER applies to buttons or inputs: the shadcn variants include `focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring` and a class utility beats the universal selector. Measured on keyboard focus: Accept button and Sign In button -> outline '2px solid rgba(0,0,0,0)' (transparent) with box-shadow ring 'rgb(3,105,160) 0 0 0 1px'. Because ring-ring is now the SAME clinical blue as the primary button fill (#0369a1) and there is no ring-offset, the focus ring on every primary/filled button is invisible (verified in screenshot - no perceivable change when focused). Inputs get only a 1px ring (below the 2px the design pass intended). Links DO get the correct 2px #0369a1 outline. Fix: use `focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2` in button.jsx/input.jsx, or drop `focus-visible:outline-none` so the global outline wins."
+        ]
+      },
+      {
+        "screen": "Driver Jobs / Driver Dashboard - WCAG AA contrast misses (slate-400 micro-copy)",
+        "issues": [
+          "'PICKUP AREA' / 'DROPOFF AREA' labels: rgb(148,163,184) on rgb(248,250,252) = 2.45:1 at 11px (needs 4.5:1)",
+          "'you keep $46.40 after commission': 148,163,184 on white = 2.56:1 at 11px",
+          "Dashboard '0 tips - 100% yours' and '15 reviews': 2.56:1 at 12px",
+          "Inactive tab 'My Jobs (4)': rgb(101,117,139) on rgb(241,245,249) = 4.29:1 (marginal fail)",
+          "Notification count badge: white on rgb(239,68,68) = 3.76:1 at 10px",
+          "Recommendation: bump these to slate-500/600 (#475569 / #334155) to actually hit AA as the design pass claims"
+        ]
+      },
+      {
+        "screen": "Landing page - palette consistency",
+        "issues": [
+          "The 'Ontario' badge next to the logo and the 'Ontario Compliance' section badge still use red-600 on red-50 (4.41:1, marginal AA fail) - an off-palette red in an otherwise blue/green clinical identity; Admin Compliance 'ca-central' badge is also rose/red"
+        ]
+      },
+      {
+        "screen": "Facility Book Transport / Billing, Admin Compliance audit filters, Driver onboarding (pre-existing)",
+        "issues": [
+          "Native browser pickers still used instead of the shadcn calendar: 'REQUESTED PICKUP TIME' datetime-local (mm/dd/yyyy --:--), Billing month input, Admin audit From/To date inputs"
+        ]
+      },
+      {
+        "screen": "Dead CSS after the font swap",
+        "issues": [
+          "/app/frontend/src/App.css still hardcodes font-family 'Archivo' (.price-tag, .metric-value) and 'Public Sans' (.metric-label). Those fonts are no longer @imported, so they would silently fall back to the generic sans and bypass Manrope/IBM Plex. Layout is NOT broken today only because no JS/JSX uses those three classes (grep = 0 usages) - remove them or repoint to Manrope"
+        ]
+      }
+    ]
+  },
+  "test_report_links": ["/app/test_reports/cleanup_it22.py"],
+  "action_items": [
+    "Fix keyboard focus visibility: in components/ui/button.jsx and input.jsx use focus-visible:ring-2 + focus-visible:ring-offset-2 (or remove focus-visible:outline-none so the global 2px #0369a1 outline applies). Today filled primary buttons show NO visible focus indicator.",
+    "Raise the slate-400 micro-copy (PICKUP/DROPOFF AREA labels, 'you keep $X after commission', dashboard sub-labels) to slate-500/600 to actually meet WCAG AA 4.5:1; also darken the inactive tab text and the red notification badge.",
+    "Decide on the red 'Ontario' / 'Ontario Compliance' / 'ca-central' badges - either accept the red accent intentionally or move them into the clinical sky/emerald palette (red-600 on red-50 is also 4.41:1).",
+    "Clean up dead Archivo/Public Sans font-family declarations in App.css (.price-tag, .metric-value, .metric-label).",
+    "Optional (pre-existing): replace native datetime-local/month/date inputs with the shadcn calendar component."
+  ],
+  "critical_code_review_comments": [
+    "index.css adds `*:focus-visible { outline }` but every shadcn control already sets `focus-visible:outline-none`; a universal selector can never beat a utility class, so the a11y intent silently fails on all buttons/inputs. Focus styling belongs in the component variants (or in the CVA base string), not in a universal rule.",
+    "ring-ring was remapped to the same hue as --primary (201 96% 32%). A focus ring that equals the primary button fill and has no ring-offset is invisible by construction - keep ring-offset-2 whenever ring color can match a filled background.",
+    "The design pass changed the palette but left ~10 slate-400 micro-copy usages that were already sub-AA; a one-off contrast audit over rendered text (like the one used here) should be part of the design pass checklist before claiming AA."
+  ],
+  "updated_files": ["/app/test_reports/cleanup_it22.py", "/app/test_reports/iteration_22.json"],
+  "success_rate": {"backend": "not tested (skipped per request)", "frontend": "100% of functional flows passed (5/5 roles); 0 console errors; 5 design/a11y findings, 1 of which (invisible button focus ring) is a real WCAG regression"},
+  "seed_data_creation": "Booked one facility job with recipient 'TEST_Design QA' (id 0d71881d-53d4-4d76-8262-e62cede877e5), used it for the dispatcher assign test, then DELETED it via admin DELETE /api/jobs/{id} (200) - so driver1 ends with no offered/active job. Driver1 also fully completed pre-existing seed job 79fd58a3-6b29-416e-bffe-a5f38956d704 (now 'delivered', recipient 'TEST_Recipient QA', +$42.00 net in earnings) as part of the end-to-end delivery test; delete it if you want a clean pool.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "As in /app/memory/test_credentials.md - all 4 accounts (admin, dispatcher1, driver1, facility1) logged in successfully; no privacy-gate modal appeared for any of them (PrivacyGate fix `[&>button.absolute]:hidden` is in place).",
+  "context_for_next_testing_agent": "Design pass verified: Manrope headings + IBM Plex body active, #0369a1 primary everywhere, h-14 (56px) driver CTAs on JobsPage and all ActiveDeliveryPage stages, both pexels landing images load, layout holds at 1536px/20px-root/390px with no clipping, zero console errors on landing, /jobs, /delivery, /facility, /dispatch, /admin. Only open items are the invisible focus ring on filled buttons (button.jsx/input.jsx use focus-visible:ring-1 with no offset and ring color == primary) and slate-400 micro-copy contrast. Backend intentionally untested this round; note that admin GET /api/admin/jobs now returns plaintext recipient_name (the enc:: leak from iteration_21 appears fixed) - worth a formal backend re-check next round.",
+  "rca_of_the_issue": "Focus-indicator regression RCA: index.css line 27 adds `*:focus-visible { outline: 2px solid #0369a1; outline-offset: 2px }`, but components/ui/button.jsx and input.jsx base classes contain `focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring`. Tailwind's outline-none compiles to `outline: 2px solid transparent`, and a class selector has higher specificity than the universal selector, so buttons/inputs keep a transparent outline and fall back to a 1px box-shadow ring. Since --ring was remapped to the same value as --primary (201 96% 32% = #0369a1) and no ring-offset is applied, the 1px ring is drawn in the same colour as the primary button's own background - measured box-shadow 'rgb(3,105,160) 0 0 0 1px' on a rgb(3,105,161) button - making keyboard focus imperceptible on every primary CTA (Sign In, Accept, Confirm Pickup, Mark Delivered)."
+}

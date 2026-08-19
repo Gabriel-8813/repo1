@@ -269,7 +269,7 @@ const DashboardPage = () => {
               <p className="font-archivo font-black text-3xl text-slate-900" data-testid="dashboard-tips-total">
                 ${tips.total.toFixed(2)}
               </p>
-              <p className="text-xs text-slate-400 mt-1">{tips.count} tip{tips.count === 1 ? '' : 's'} · 100% yours</p>
+              <p className="text-xs text-slate-500 mt-1">{tips.count} tip{tips.count === 1 ? '' : 's'} · 100% yours</p>
             </CardContent>
           </Card>
 
@@ -286,7 +286,7 @@ const DashboardPage = () => {
               <p className="font-archivo font-black text-3xl text-slate-900" data-testid="dashboard-rating-avg">
                 {rating.count === 0 ? '—' : rating.avg.toFixed(1)}
               </p>
-              <p className="text-xs text-slate-400 mt-1">
+              <p className="text-xs text-slate-500 mt-1">
                 {rating.count === 0 ? 'No reviews yet' : `${rating.count} review${rating.count === 1 ? '' : 's'}`}
               </p>
             </CardContent>

@@ -254,6 +254,14 @@ Build an app for medical transportation that people can register and pay a month
 - **Immutable audit log**: SHA-256 hash chain (seq/prev_hash/hash, asyncio lock, head pointer in settings detects tail truncation); GET /admin/compliance/audit-integrity + verify button; no edit/delete routes exist; 5,300+ entries chained
 - Tested: iteration 21 (30-test hardening suite; 3 ciphertext-leak fixes + CRITICAL PrivacyGate button fix ([&>button.absolute]:hidden) + truncation detection all re-verified green); leftover test users cleaned (38)
 
+### Clinical Design Pass (June 2026)
+- Design system via design_agent → /app/design_guidelines.json: Manrope headings + IBM Plex Sans body (Archivo/Public Sans removed incl. App.css), Tailwind blue remapped to clinical sky (#0369a1/#075985, AA on white), shadcn --primary/--ring 201 96% 32%, global focus-visible + prefers-reduced-motion
+- Driver app: h-14 (56px) tap targets on all primary CTAs/inputs; micro-copy contrast raised to AA (slate-400→500/600); notification badge red-600
+- Landing: clinical courier + Toronto skyline imagery (pexels), Ontario badges moved from red to clinical blue; 'Ontario's Medical Transport Network' identity preserved
+- Focus rings fixed (button/input ring-2 + offset — old rings were invisible on filled buttons)
+- Tested: iteration 22 frontend regression — 5/5 role flows pass, 0 console errors; all flagged a11y issues fixed (focus visibility, contrast, off-palette badges)
+- Remaining design nit (P3): native date/month inputs instead of shadcn calendar (pre-existing)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

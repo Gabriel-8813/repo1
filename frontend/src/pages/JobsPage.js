@@ -304,7 +304,7 @@ const JobsPage = () => {
                           <div className="flex items-start gap-2">
                             <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                             <div className="min-w-0">
-                              <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Pickup area</p>
+                              <p className="text-[11px] uppercase tracking-wide text-slate-600 font-semibold">Pickup area</p>
                               <p className="text-sm font-medium text-slate-800" data-testid={`job-pickup-area-${job.id}`}>{job.pickup_area || job.pickup_city}</p>
                             </div>
                           </div>
@@ -314,7 +314,7 @@ const JobsPage = () => {
                           <div className="flex items-start gap-2">
                             <MapPin className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                             <div className="min-w-0">
-                              <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Dropoff area</p>
+                              <p className="text-[11px] uppercase tracking-wide text-slate-600 font-semibold">Dropoff area</p>
                               <p className="text-sm font-medium text-slate-800" data-testid={`job-dropoff-area-${job.id}`}>{job.dropoff_area || job.delivery_city}</p>
                             </div>
                           </div>
@@ -329,14 +329,14 @@ const JobsPage = () => {
                           </div>
                           <div className="text-right">
                             <p className="font-archivo font-black text-3xl text-slate-900" data-testid={`job-payout-${job.id}`}>${Number(payout).toFixed(2)}</p>
-                            <p className="text-[11px] text-slate-400">you keep ${(payout - commissionPreview).toFixed(2)} after commission</p>
+                            <p className="text-[11px] text-slate-600">you keep ${(payout - commissionPreview).toFixed(2)} after commission</p>
                           </div>
                         </div>
 
                         <div className="flex gap-3">
                           <Button
                             variant="outline"
-                            className="flex-1 h-12 rounded-full text-slate-600 border-slate-300 active:scale-[0.98]"
+                            className="flex-1 h-14 rounded-full text-slate-600 border-slate-300 active:scale-[0.98]"
                             disabled={busy}
                             onClick={() => handleDeclineJob(job.id)}
                             data-testid={`decline-job-${job.id}-btn`}
@@ -344,7 +344,7 @@ const JobsPage = () => {
                             Decline
                           </Button>
                           <Button
-                            className="flex-[2] h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-semibold active:scale-[0.98]"
+                            className="flex-[2] h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-semibold active:scale-[0.98]"
                             disabled={busy}
                             onClick={() => handleAcceptJob(job.id)}
                             data-testid={`accept-job-${job.id}-btn`}
@@ -398,7 +398,7 @@ const JobsPage = () => {
                                 <div className="flex items-start gap-2">
                                   <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
                                   <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Pickup</p>
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-600 font-semibold">Pickup</p>
                                     <p className="text-sm font-medium text-slate-800" data-testid={`job-pickup-full-${job.id}`}>
                                       {fullAddress(job.pickup_address, job.pickup_city)}
                                     </p>
@@ -407,7 +407,7 @@ const JobsPage = () => {
                                 <div className="flex items-start gap-2">
                                   <MapPin className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
                                   <div>
-                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Dropoff</p>
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-600 font-semibold">Dropoff</p>
                                     <p className="text-sm font-medium text-slate-800" data-testid={`job-dropoff-full-${job.id}`}>
                                       {fullAddress(job.delivery_address, job.delivery_city)}
                                     </p>
@@ -417,7 +417,7 @@ const JobsPage = () => {
                                   <div className="flex items-start gap-2">
                                     <Phone className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
                                     <div>
-                                      <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Recipient</p>
+                                      <p className="text-[11px] uppercase tracking-wide text-slate-600 font-semibold">Recipient</p>
                                       <p className="text-sm font-medium text-slate-800" data-testid={`job-recipient-${job.id}`}>
                                         {job.recipient_name}{job.recipient_phone ? ` · ${job.recipient_phone}` : ''}
                                       </p>
