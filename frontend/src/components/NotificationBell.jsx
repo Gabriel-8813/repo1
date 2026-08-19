@@ -80,7 +80,7 @@ export const NotificationBell = ({ dark = false }) => {
         <Button variant="ghost" size="sm" className={`relative px-2 ${dark ? 'text-white hover:bg-white/10' : ''}`} data-testid="notification-bell">
           <Bell className="w-5 h-5" />
           {unread > 0 && (
-            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center" data-testid="notification-badge">
+            <span className="absolute -top-0.5 -right-0.5 min-w-[18px] h-[18px] px-1 rounded-full bg-red-600 text-white text-[10px] font-bold flex items-center justify-center" data-testid="notification-badge">
               {unread > 99 ? '99+' : unread}
             </span>
           )}

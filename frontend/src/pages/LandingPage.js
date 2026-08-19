@@ -29,7 +29,7 @@ const LandingPage = () => {
                 <Truck className="w-6 h-6 text-white" />
               </div>
               <span className="font-archivo font-bold text-xl text-slate-900">MediTrans</span>
-              <Badge variant="outline" className="ml-2 text-red-600 border-red-200 bg-red-50">Ontario</Badge>
+              <Badge variant="outline" className="ml-2 text-blue-700 border-blue-200 bg-blue-50">Ontario</Badge>
             </div>
             <div className="hidden md:flex items-center gap-6">
               <a href="#features" className="nav-link">Features</a>
@@ -91,8 +91,8 @@ const LandingPage = () => {
             </div>
             <div className="relative animate-fade-in-up stagger-2">
               <img 
-                src="https://images.unsplash.com/photo-1646920912229-bc0d5d94e68b?crop=entropy&cs=srgb&fm=jpg&q=85&w=600" 
-                alt="Medical courier ready for delivery"
+                src="https://images.pexels.com/photos/6818157/pexels-photo-6818157.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940" 
+                alt="Medical courier handling a secure clinical parcel"
                 className="rounded-2xl shadow-2xl w-full"
               />
               {/* Floating card */}
@@ -179,8 +179,8 @@ const LandingPage = () => {
             </div>
             <div>
               <img 
-                src="https://images.unsplash.com/photo-1628182087681-b6e7d4a26efd?crop=entropy&cs=srgb&fm=jpg&q=85&w=600"
-                alt="Toronto skyline representing Ontario coverage"
+                src="https://images.pexels.com/photos/16669433/pexels-photo-16669433.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940"
+                alt="Toronto skyline representing Ontario-wide coverage"
                 className="rounded-2xl shadow-xl"
               />
             </div>

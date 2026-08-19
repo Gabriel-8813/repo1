@@ -183,7 +183,7 @@ export const AdminComplianceTab = () => {
           <CardContent className="p-4 space-y-2">
             <div className="flex items-center justify-between">
               <p className="text-sm font-bold text-slate-900">Data residency & encryption</p>
-              <Badge className="bg-red-100 text-red-700 font-semibold" data-testid="residency-region-badge">🍁 {residency?.configured_region || '—'}</Badge>
+              <Badge className="bg-blue-50 text-blue-700 border border-blue-200 font-semibold" data-testid="residency-region-badge">🍁 {residency?.configured_region || '—'}</Badge>
             </div>
             <div className="space-y-1.5" data-testid="residency-components">
               {(residency?.components || []).map((c) => (

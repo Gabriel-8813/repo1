@@ -1,188 +1,116 @@
 {
-  "project_name": "MediTrans Ontario",
-  "identity": {
-    "persona": "E1 - The Anti-AI Designer",
-    "mission": "Create a clinical, trustworthy, and logistics-focused medical transport platform.",
-    "vibe": "Swiss Clinical x High-Speed Logistics. Sterile but fast.",
-    "archetype": "Archetype 4: Swiss & High-Contrast (Authority, Clarity) mixed with Archetype 2: The Performance Pro (Logistics)."
+  "theme": "light",
+  "typography": {
+    "fonts": {
+      "heading": "Manrope, sans-serif",
+      "body": "IBM Plex Sans, sans-serif",
+      "mono": "JetBrains Mono, monospace"
+    },
+    "scale": {
+      "h1": "text-4xl md:text-5xl lg:text-6xl font-bold tracking-tight text-slate-900",
+      "h2": "text-2xl md:text-3xl font-semibold tracking-tight text-slate-800",
+      "h3": "text-xl md:text-2xl font-medium text-slate-800",
+      "h4": "text-lg md:text-xl font-medium text-slate-800",
+      "body_large": "text-lg text-slate-700 leading-relaxed",
+      "body": "text-base text-slate-700 leading-relaxed",
+      "small": "text-sm text-slate-500 uppercase tracking-[0.2em] font-semibold"
+    },
+    "instructions": "E1 ANTI-DEFAULT RULE: Do NOT use Inter for headings. Keep leading loose for body (leading-relaxed) to aid elderly readers. Ensure tight tracking on headings. Implement fluid scaling for large displays."
   },
-  "design_system": {
-    "typography": {
-      "headings": {
-        "family": "Archivo",
-        "weights": ["600", "700", "900"],
-        "usage": "Headings, Data Values, KPIs. Tight tracking (-0.02em).",
-        "import": "@import url('https://fonts.googleapis.com/css2?family=Archivo:wght@400;600;700;900&display=swap');"
+  "colors": {
+    "palette": {
+      "primary": "#0369a1",
+      "primary_hover": "#075985",
+      "primary_soft": "#e0f2fe",
+      "secondary": "#059669",
+      "secondary_soft": "#d1fae5",
+      "background": "#ffffff",
+      "surface": "#f8fafc",
+      "surface_alt": "#f1f5f9",
+      "border": "#e2e8f0",
+      "text_main": "#0f172a",
+      "text_muted": "#475569",
+      "status_critical": "#dc2626",
+      "status_critical_soft": "#fee2e2",
+      "status_warning": "#d97706",
+      "status_warning_soft": "#fef3c7",
+      "status_success": "#059669",
+      "status_success_soft": "#d1fae5"
+    },
+    "instructions": "Clinical palette (Archetype: Health/Trust) focusing on calm, soft blues and greens on pure white. Avoid teal-green per E1 rules. Do not use pure black; use tinted slates. Ensure WCAG AA contrast (min 4.5:1 for body text, 3:1 for large text/interactive elements). Hover state color MUST be a darker/lighter hue explicitly set."
+  },
+  "layouts": {
+    "driver_app": "Mobile-first layout. E1 Space Rule: Generous spacing. Use large tap targets (min h-14, min-w-[44px]). Sticky bottom action bar with massive primary button (w-full). Cards need p-6 for touch-friendly breathing room.",
+    "facility_portal": "Standard sidebar layout. Max-w-7xl content area. Form inputs must be large (h-12) with explicit labels above, left-aligned. No placeholder-only labels.",
+    "dispatch_console": "High Density Grid Protocol. Full-width desktop Kanban (7 columns). Horizontal scroll allowed. Tight gap (gap-4) but generous padding inside cards. Use shape-coded markers for custody timeline.",
+    "admin_center": "High-density data tables. Sticky headers. Use striped rows for readability. Action menus on the far right.",
+    "spacing_scale": "Tailwind Scale: p-4, p-6, p-8, p-12. Prioritize generous spacing (e.g., gap-6 or gap-8) between discrete sections. Containers with borders MUST have internal padding."
+  },
+  "surfaces": {
+    "cards": "Flat solid background (bg-white), 1px solid border (border-slate-200), subtle ambient shadow (shadow-sm). DO NOT USE GLASSMORPHISM for medical context (prevents data refraction).",
+    "modals": "Opaque white background with dark semi-transparent backdrop (bg-slate-900/60). No backdrop-blur for clinical/health apps.",
+    "headers": "Solid white with a crisp 1px border-b (border-slate-200). Never transparent over content."
+  },
+  "motion": {
+    "instructions": "Minimalist and purposeful. Micro-interactions for hover states (e.g., -translate-y-1 on cards, subtle shadow-md). Transitions MUST specify properties (transition-transform, transition-colors), never 'transition-all'. Respect prefers-reduced-motion."
+  },
+  "accessibility": {
+    "contrast": "Strict WCAG AA adherence. Interactive elements must have 3:1 against background. Text must have 4.5:1.",
+    "touch_targets": "Driver app buttons/links MUST be at least 44x44px. Use min-h-[56px] for primary mobile actions.",
+    "visual_cues": "Do not rely on color alone for status; use shape-coded icons (e.g., Triangle for warning, Circle for success, Hexagon for critical).",
+    "data_testid": "ALL interactive elements and key information displays MUST include semantic data-testid attributes (e.g., data-testid='driver-accept-job-button')."
+  },
+  "media": {
+    "image_urls": {
+      "medical_courier_box": {
+        "url": "https://images.pexels.com/photos/6818157/pexels-photo-6818157.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Masked delivery service handling a secure parcel. Use for driver app onboarding or facility portal landing.",
+        "category": "driver_app_marketing"
       },
-      "body": {
-        "family": "Public Sans",
-        "weights": ["400", "500"],
-        "usage": "Body text, UI labels, Forms.",
-        "import": "@import url('https://fonts.googleapis.com/css2?family=Public+Sans:wght@400;500;600&display=swap');"
+      "courier_handover": {
+        "url": "https://images.pexels.com/photos/6818155/pexels-photo-6818155.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Delivery professional handing secure package inside building. Use for signature capture flow or recipient tracking page.",
+        "category": "recipient_tracking"
+      },
+      "lab_professional": {
+        "url": "https://images.unsplash.com/photo-1614935151651-0bea6508db6b?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA2OTV8MHwxfHNlYXJjaHwxfHxjbGluaWNhbCUyMGxhYm9yYXRvcnklMjBwcm9mZXNzaW9uYWx8ZW58MHx8fHwxNzg3MTUyNTg0fDA&ixlib=rb-4.1.0&q=85",
+        "description": "Scientist in clinical laboratory. Use for facility portal login/marketing.",
+        "category": "facility_portal_hero"
+      },
+      "lab_worker_blood_sample": {
+        "url": "https://images.pexels.com/photos/6285363/pexels-photo-6285363.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Healthcare worker examining sample. Great for facility portal booking empty states or marketing.",
+        "category": "facility_portal_empty_state"
+      },
+      "ontario_cityscape": {
+        "url": "https://images.pexels.com/photos/16669433/pexels-photo-16669433.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940",
+        "description": "Toronto/Ontario skyline. Use as a subtle background for the public recipient delivery page or main landing page hero.",
+        "category": "landing_page_background"
       }
     },
-    "colors": {
-      "palette": {
-        "primary": {
-          "name": "Deep Navy (Authority)",
-          "hex": "#0F172A",
-          "tailwind": "bg-slate-900"
-        },
-        "secondary": {
-          "name": "Clinical White",
-          "hex": "#F8FAFC",
-          "tailwind": "bg-slate-50"
-        },
-        "accent": {
-          "name": "Signal Blue (Action)",
-          "hex": "#2563EB",
-          "tailwind": "bg-blue-600"
-        },
-        "success": {
-          "name": "Permit Green",
-          "hex": "#10B981",
-          "tailwind": "bg-emerald-500"
-        },
-        "destructive": {
-          "name": "Emergency Red",
-          "hex": "#EF4444",
-          "tailwind": "bg-red-500"
-        },
-        "warning": {
-          "name": "Hazard Orange",
-          "hex": "#F59E0B",
-          "tailwind": "bg-amber-500"
-        }
-      },
-      "theme_strategy": "Light Mode Default (Clinical Trust). Dark Mode for 'Night Drive' Dashboard only.",
-      "gradients": "NO generic gradients. Use subtle 'mesh' gradients only for Hero backgrounds (e.g., Slate 900 to Slate 800)."
-    },
-    "spacing": {
-      "scale": "Generous. Use p-8, p-12 for sections. p-6 for cards.",
-      "grid_gap": "gap-6 or gap-8 for layouts. gap-4 for dense data grids."
-    },
-    "radius": {
-      "default": "rounded-md (6px)",
-      "buttons": "rounded-full (Pill shape for primary actions)",
-      "cards": "rounded-lg (8px)"
-    },
-    "shadows": {
-      "card": "shadow-[0_2px_8px_rgba(0,0,0,0.08)]",
-      "hover": "shadow-[0_8px_24px_rgba(0,0,0,0.12)]",
-      "glass": "backdrop-blur-xl bg-white/80 border border-white/20 shadow-sm"
-    }
-  },
-  "assets": {
-    "images": [
-      {
-        "url": "https://images.unsplash.com/photo-1646920912229-bc0d5d94e68b?crop=entropy&cs=srgb&fm=jpg&q=85",
-        "category": "hero_courier",
-        "description": "Medical courier in green jacket with delivery bag. Use for 'Driver Onboarding' section.",
-        "alt": "Medical courier ready for delivery"
-      },
-      {
-        "url": "https://images.unsplash.com/photo-1766325693423-69e9fe20605b?crop=entropy&cs=srgb&fm=jpg&q=85",
-        "category": "medical_transport",
-        "description": "Paramedic/Ambulance context. Use for 'Trust & Safety' or 'Medical Standards' section.",
-        "alt": "Professional medical transport vehicle"
-      },
-      {
-        "url": "https://images.unsplash.com/photo-1628182087681-b6e7d4a26efd?crop=entropy&cs=srgb&fm=jpg&q=85",
-        "category": "location_context",
-        "description": "Toronto Skyline. Use for 'Ontario-wide Coverage' section background or map overlay.",
-        "alt": "Toronto skyline representing Ontario coverage"
-      },
-      {
-        "url": "https://images.unsplash.com/photo-1632857997897-9418428d7368?crop=entropy&cs=srgb&fm=jpg&q=85",
-        "category": "location_context_alt",
-        "description": "Toronto Cityscape from water. Alternative for location context.",
-        "alt": "Toronto city view"
-      }
-    ],
-    "icons": {
-      "library": "lucide-react",
-      "style": "Stroke width 1.5px (Thin/Clinical).",
-      "specifics": [
-        "Truck (Logistics)",
-        "Stethoscope (Medical)",
-        "ShieldCheck (Compliance)",
-        "MapPin (Tracking)",
-        "FileText (Permits)",
-        "CreditCard (Billing)"
-      ]
-    }
-  },
-  "pages": {
-    "landing": {
-      "layout": "Tetris Grid (Mode A)",
-      "sections": [
-        {
-          "name": "Hero",
-          "style": "Split screen. Left: Value Prop (H1 Archivo Black). Right: Hero Image (Courier) with 'Glass' floating cards showing 'Live Job: Insulin Delivery - 12km'.",
-          "cta": "Start Driving (Primary Blue) / Book Transport (Outline)"
-        },
-        {
-          "name": "Ontario Compliance",
-          "style": "Bento Grid. Cards for 'CVOR Certified', 'TDG Training', 'Vulnerable Sector Check'. Use Check icons heavily.",
-          "bg": "bg-slate-50"
-        },
-        {
-          "name": "Pricing",
-          "style": "3-Column Grid. 'Basic' (Grey), 'Pro' (Blue Border + Glow), 'Premium' (Dark Slate).",
-          "features": ["$49/mo Basic", "$99/mo Pro", "$149/mo Premium"]
-        }
-      ]
-    },
-    "dashboard_driver": {
-      "layout": "High Density Grid (Mode B)",
-      "theme": "Option for Dark Mode (Night Drive)",
-      "widgets": [
-        "Active Job (Map view + ETA)",
-        "Earnings (Bar Chart - Shadcn)",
-        "Compliance Status (Green/Red indicators)",
-        "Job Feed (List of available medical runs)"
-      ]
-    },
-    "onboarding": {
-      "layout": "Centered Card (Width 600px)",
-      "steps": ["Personal Info", "Vehicle Details", "Upload Documents (License, Insurance, TDG)", "Background Check Consent"]
-    }
+    "instructions": "Replace all food-delivery stock imagery with the provided clinical/medical transport visuals. Do not use generic placeholders. Add descriptive alt text for screen readers."
   },
   "components": {
-    "ui_library": "shadcn/ui",
-    "custom_components": [
-      {
-        "name": "PermitCard",
-        "description": "Card showing permit status. Icon left, Title top, Status badge right, Expiry date bottom.",
-        "props": ["status: 'valid' | 'expired' | 'pending'", "expiryDate"]
-      },
-      {
-        "name": "JobRow",
-        "description": "List item for job board. Origin -> Destination arrow visual. Price right aligned. 'Medical Goods' tag.",
-        "style": "Border-b border-slate-100 hover:bg-slate-50 transition-colors"
-      },
-      {
-        "name": "StatMetric",
-        "description": "Big number (Archivo Black), small label (Public Sans). Used for 'Total Earnings', 'Jobs Completed'.",
-        "style": "text-4xl font-black text-slate-900"
-      }
-    ]
+    "buttons": "Rounded-xl for clinical/friendly touch (avoids harsh corners). Driver app primary CTA MUST span full width on mobile (w-full h-14 text-lg).",
+    "inputs": "Height 12 (h-12) or 14 (h-14) for driver app. Strong border (border-slate-300). Focus states MUST have ring-2 ring-primary ring-offset-1.",
+    "badges": "Use for status ('In Transit', 'Delivered'). Must include dot or icon + text. Example: bg-blue-50 text-blue-700 border border-blue-200 rounded-full px-3 py-1.",
+    "tables": "Admin/Facility tables should use customized Shadcn Table. Ensure row hover states (hover:bg-slate-50) and generous cell padding (p-4).",
+    "kanban": "Dispatch board columns: bg-slate-50/50 rounded-xl p-3. Kanban Cards: bg-white shadow-sm border border-slate-200. Cards MUST show custody timeline via distinct vertical line or step indicator."
+  },
+  "visual_enhancers": {
+    "icons": "lucide-react for clinical, clean aesthetic. Use larger stroke widths (stroke-width 2.5) and larger sizes (w-6 h-6 or w-8 h-8) for driver app icons to improve visibility outdoors.",
+    "textures": "Keep minimal for clinical trust. DO NOT USE noisy gradients. Flat solid colors prioritize legibility."
   },
   "instructions_to_main_agent": [
-    "INSTALL FONTS: Add Archivo and Public Sans to index.html or import in CSS.",
-    "SETUP TAILWIND: Update tailwind.config.js with the 'Deep Navy' and 'Signal Blue' palette.",
-    "USE IMAGES: Use the provided Unsplash URLs. DO NOT use placeholders.",
-    "ONTARIO CONTEXT: Ensure all copy refers to 'Ontario', 'GTA', 'Ministry of Transportation', 'CVOR', 'TDG'.",
-    "MEDICAL VIBE: Keep whitespace high. Avoid clutter. Think 'Sterile Cockpit'.",
-    "TESTIDS: Add data-testid to all buttons and inputs (e.g., 'login-btn', 'permit-upload').",
-    "NO GRADIENTS: Do not use gradient text. Keep it solid and high-contrast.",
-    "TOASTS: Use 'sonner' for notifications (e.g., 'New Job Available')."
+    "Replace 'font-archivo' with 'font-manrope' (headings) and 'font-ibm-plex' (body).",
+    "For the driver app, heavily prioritize mobile-first classes. Implement a sticky bottom bar with massive touch targets.",
+    "Never use generic centered layouts for data or forms; left-align for clinical readability.",
+    "Apply all colors as Tailwind arbitrary values or mapped CSS variables (e.g., text-slate-900, bg-[#0369a1]) to incrementally upgrade the UI without breaking existing class references.",
+    "Ensure 'Ontario\\'s Medical Transport Network' identity and MediTrans logo (text or SVG) is in the top-left of all headers.",
+    "Include data-testid on every single interactive element (button, link, form input, checkbox, modal trigger, tab) WITHOUT EXCEPTION.",
+    "Implement the Dispatch Kanban with CSS Grid/Flex, ensuring it scrolls horizontally if needed while keeping 7 columns fixed width.",
+    "Avoid glassmorphism globally. Use flat, solid backgrounds to prevent visual refraction of clinical data.",
+    "Ensure large legible type support (text-base or text-lg minimum for recipient pages, suitable for elderly users)."
   ],
-  "universal_guidelines": [
-    "Avoid 'AI Slop' (generic centered layouts). Use asymmetry.",
-    "Use 2-3x more padding than standard.",
-    "Micro-animations on all interactive elements.",
-    "Dark colors look good when used independently without gradients.",
-    "Never use AI assistant emojis."
-  ]
+  "UNIVERSAL_GUIDELINES_FOR_MAIN_AGENT": "Do not make generic centered layouts. Create depth through layered design elements using solid borders and ambient shadows rather than glassmorphism. Use 2-3x more spacing than feels comfortable. Every interaction needs micro-animations (e.g., hover states, transitions for inputs, excluding transforms from universal transition). Always use modern button styles (rounded-xl) with interaction animations. NEVER use AI assistant Emoji characters for icons. You MUST NOT apply universal transition (transition: all). Use specific properties. DO NOT use complete transparent backgrounds under content. Provide toast notifications via Sonner for critical actions."
 }
