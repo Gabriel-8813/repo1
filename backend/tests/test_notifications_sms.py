@@ -68,7 +68,7 @@ def book_job(tokens, created_job_ids, consent=True, title_suffix=""):
         "item_category": "prescription",
         "handling_flags": [],
         "special_instructions": "TEST_QA notifications suite",
-        "requested_pickup_time": "2026-07-20T15:00:00Z",
+        "requested_pickup_time": "2026-07-20T15:00:00Z", "consent_data_handling": True,
         "recipient_sms_consent": consent,
     }
     r = requests.post(f"{API}/facility/requests", headers=H(tokens["facility"]), json=payload, timeout=60)

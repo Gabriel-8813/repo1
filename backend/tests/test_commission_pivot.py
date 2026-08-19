@@ -35,7 +35,7 @@ def _login(email, password):
 
 
 def _register(email, password, full_name="Test User", phone="+1-647-555-0000"):
-    r = requests.post(f"{API}/auth/register", json={
+    r = requests.post(f"{API}/auth/register", json={ "privacy_policy_accepted": True,
         "email": email, "password": password, "full_name": full_name, "phone": phone
     }, timeout=15)
     return r

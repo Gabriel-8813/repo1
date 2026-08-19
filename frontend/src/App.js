@@ -19,6 +19,8 @@ import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FacilityHomePage from "./pages/FacilityHomePage";
 import ConfirmDeliveryPage from "./pages/ConfirmDeliveryPage";
+import PrivacyPolicyPage from "./pages/PrivacyPolicyPage";
+import { PrivacyGate } from "./components/PrivacyGate";
 import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
@@ -128,6 +130,7 @@ function AppRoutes() {
       <Route path="/tip/:jobId" element={<TipPage />} />
       <Route path="/rate/:jobId" element={<RatePage />} />
       <Route path="/confirm/:token" element={<ConfirmDeliveryPage />} />
+      <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 
@@ -240,6 +243,7 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
+        <PrivacyGate />
         <Toaster position="top-right" richColors offset={64} />
       </AuthProvider>
     </BrowserRouter>

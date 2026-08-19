@@ -245,6 +245,15 @@ Build an app for medical transportation that people can register and pay a month
 - **Admin Compliance tab**: SMS outbox table with dev/live badge + opt-out management (audited)
 - Tested: iteration 20 — 23-test suite + full regression; HIGH bug (missing job_offer on pool assignment) + blank legacy notifications + duplicate route fixed and re-verified (45/45 pytest)
 
+### Health-Data Hardening (June 2026)
+- **Encryption at rest**: Fernet field-level (DATA_ENCRYPTION_KEY in backend .env) for jobs.recipient_name/phone + custody recipient fields ('enc::' prefix); decrypt at all authorized read points (scoped_job, custody list/detail/POST response, PDF, board, deliveries, statement, breach, admin/jobs, SMS send); migration done (migrate_hardening.py); TLS in transit
+- **Least privilege** (pre-existing scoped_job whitelist) verified: unassigned drivers get masked areas only, no billing/pricing fields, no ciphertext leaks anywhere
+- **Consent capture**: booking requires consent_data_handling (422 otherwise); job stores consent {delivery_and_data_handling, sms_updates, captured_by, captured_at, policy_version}
+- **Privacy-policy gate**: signup requires acceptance (422 otherwise); existing users get one-time blocking PrivacyGate modal (POST /auth/accept-privacy, audited); public /privacy page; PRIVACY_POLICY_VERSION '1.0'
+- **Residency**: GET /admin/compliance/residency (DATA_REGION=ca-central attestation) + Compliance tab card; production must provision Canadian regions
+- **Immutable audit log**: SHA-256 hash chain (seq/prev_hash/hash, asyncio lock, head pointer in settings detects tail truncation); GET /admin/compliance/audit-integrity + verify button; no edit/delete routes exist; 5,300+ entries chained
+- Tested: iteration 21 (30-test hardening suite; 3 ciphertext-leak fixes + CRITICAL PrivacyGate button fix ([&>button.absolute]:hidden) + truncation detection all re-verified green); leftover test users cleaned (38)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

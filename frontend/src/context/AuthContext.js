@@ -47,7 +47,8 @@ export const AuthProvider = ({ children }) => {
       email,
       password,
       full_name,
-      phone
+      phone,
+      privacy_policy_accepted: true
     });
     const { access_token, user: userData } = response.data;
     localStorage.setItem('meditrans_token', access_token);

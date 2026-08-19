@@ -71,7 +71,7 @@ def fresh_driver(admin_token):
     """Register a throwaway driver; delete via admin at teardown."""
     email = f"TEST_qa_{uuid.uuid4().hex[:8]}@test.com"
     pwd = "QaDriver@123"
-    r = requests.post(f"{API}/auth/register", json={
+    r = requests.post(f"{API}/auth/register", json={ "privacy_policy_accepted": True,
         "email": email, "password": pwd, "full_name": "TEST_QA Driver",
         "role": "driver", "phone": "6470000000"
     }, timeout=30)

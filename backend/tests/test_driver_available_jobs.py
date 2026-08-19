@@ -62,7 +62,7 @@ def facility_id(tokens):
 def driver2(tokens):
     """Register a fresh second driver + approved driver record; cleaned up at teardown."""
     email = f"TEST_driver2_{uuid.uuid4().hex[:8]}@test.com"
-    r = requests.post(f"{API}/auth/register", json={
+    r = requests.post(f"{API}/auth/register", json={ "privacy_policy_accepted": True,
         "email": email, "password": "Driver@123", "full_name": "TEST Driver Two",
         "role": "driver", "phone": "6470000000"
     }, timeout=30)

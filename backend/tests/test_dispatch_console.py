@@ -241,7 +241,7 @@ class TestCustodyStaffAccess:
             "item_category": "lab_sample", "item_count": 1,
             "recipient_name": "QA Lab", "recipient_phone": "416-555-0122",
             "handling_flags": [], "urgency": "standard",
-            "requested_pickup_time": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(),
+            "requested_pickup_time": (datetime.now(timezone.utc) + timedelta(hours=3)).isoformat(), "consent_data_handling": True,
         }
         r = requests.post(f"{API}/facility/requests", json=payload, headers=hdr(tokens, "facility"), timeout=90)
         if r.status_code not in (200, 201):
