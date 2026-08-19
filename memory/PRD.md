@@ -187,6 +187,12 @@ Build an app for medical transportation that people can register and pay a month
 - **Tested**: iteration_13 — new tests/test_facility_portal.py 10/10 (payout math exact, masking/reveal, 400/403/422 paths), full suite 167/169 (2 informational), full desktop UI flow + driver mobile regression. Post-test UI fixes applied and verified compile + suite re-run
 - Known informational notes from testing: no login brute-force lockout (backlog), CORS wildcard+credentials (backlog), server.py 2,900 lines (refactor backlog), geocode results not cached
 
+### Facility "My Deliveries" Dashboard (June 2026)
+- **GET /api/facility/deliveries** (facility sees ONLY own jobs — posted_by or owned facility_id; staff see all; driver 403): jobs enriched with assigned driver {name (fallback "Driver (deactivated)"), rating_avg, rating_count} and last custody event
+- **Portal right column is now the live dashboard** (10s poll, "live" pulse): per-job 6-step status tracker (Created→Offered→Accepted→Picked up→In transit→Delivered; legacy open/in_progress/completed mapped; returned/cancelled shown as red banner), driver chip with star rating once accepted, live driver-location link (latest GPS ping → Google Maps, shown while picked_up/in_transit with "x min ago")
+- **Proof of Delivery dialog** on delivered jobs: recipient name + relationship, delivery timestamp, GPS, and the signature/ID evidence image (served via /api/delivery-evidence with facility-owner access)
+- Self-tested: curl (scoping, 403 for driver, driver/rating/last_event enrichment) + desktop UI screenshot (trackers, driver 5.0(4) chip, returned banner, POD dialog with evidence image rendering)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

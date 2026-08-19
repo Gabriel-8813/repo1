@@ -7,7 +7,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle } from 'lucide-react';
+import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage } from 'lucide-react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { toast } from 'sonner';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
@@ -34,30 +35,53 @@ const emptyForm = {
   item_count: 1, item_category: 'prescription', handling_flags: [], special_instructions: '', requested_pickup_time: ''
 };
 
+const STEPS = [['created', 'Created'], ['offered', 'Offered'], ['accepted', 'Accepted'], ['picked_up', 'Picked up'], ['in_transit', 'In transit'], ['delivered', 'Delivered']];
+const STEP_INDEX = { created: 0, open: 1, offered: 1, accepted: 2, in_progress: 2, picked_up: 3, in_transit: 4, delivered: 5, completed: 5 };
+
+const timeAgo = (iso) => {
+  if (!iso) return null;
+  const m = Math.round((Date.now() - new Date(iso).getTime()) / 60000);
+  return m < 1 ? 'just now' : m < 60 ? `${m} min ago` : `${Math.round(m / 60)} h ago`;
+};
+
 export default function FacilityHomePage() {
   const { user, token, logout } = useAuth();
   const navigate = useNavigate();
   const headers = { Authorization: `Bearer ${token}` };
 
   const [facility, setFacility] = useState(undefined);
-  const [jobs, setJobs] = useState([]);
+  const [deliveries, setDeliveries] = useState([]);
+  const [podJob, setPodJob] = useState(null);
+  const [podEvents, setPodEvents] = useState(null);
   const [form, setForm] = useState(emptyForm);
   const [setup, setSetup] = useState({ name: '', type: 'pharmacy', address: '', contact_name: '', contact_phone: '', billing_email: '' });
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [fr, jr] = await Promise.all([
+      const [fr, dr] = await Promise.all([
         axios.get(`${API}/facilities`, { headers }),
-        axios.get(`${API}/jobs`, { headers })
+        axios.get(`${API}/facility/deliveries`, { headers })
       ]);
       setFacility(fr.data.facilities[0] || null);
-      setJobs(jr.data.jobs);
+      setDeliveries(dr.data.deliveries);
     } catch { setFacility(null); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  useEffect(() => { load(); const iv = setInterval(load, 20000); return () => clearInterval(iv); }, [load]);
+  useEffect(() => { load(); const iv = setInterval(load, 10000); return () => clearInterval(iv); }, [load]);
+
+  const openPod = async (job) => {
+    setPodJob(job);
+    setPodEvents(null);
+    try {
+      const r = await axios.get(`${API}/jobs/${job.id}/custody-events`, { headers });
+      setPodEvents(r.data.custody_events);
+    } catch {
+      toast.error('Failed to load proof of delivery');
+      setPodJob(null);
+    }
+  };
 
   const toggleFlag = (f) => setForm((s) => ({
     ...s, handling_flags: s.handling_flags.includes(f) ? s.handling_flags.filter((x) => x !== f) : [...s.handling_flags, f]
@@ -203,34 +227,113 @@ export default function FacilityHomePage() {
               </Card>
             </div>
 
-            {/* Requests list */}
+            {/* My Deliveries dashboard */}
             <div className="lg:col-span-2">
-              <h2 className="font-archivo font-bold text-2xl text-slate-900 mb-4">Your Requests</h2>
-              {jobs.length === 0 ? (
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="font-archivo font-bold text-2xl text-slate-900">My Deliveries</h2>
+                <span className="text-[11px] text-slate-400 flex items-center gap-1"><span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></span> live</span>
+              </div>
+              {deliveries.length === 0 ? (
                 <Card className="border-0 shadow-sm"><CardContent className="py-12 text-center text-slate-500 text-sm">No delivery requests yet.</CardContent></Card>
               ) : (
-                <div className="space-y-3" data-testid="facility-jobs-list">
-                  {jobs.map((j) => (
-                    <Card key={j.id} className="border-0 shadow-sm" data-testid={`facility-job-${j.id}`}>
-                      <CardContent className="p-4">
-                        <div className="flex items-center justify-between gap-2 mb-1">
-                          <p className="font-semibold text-slate-900 text-sm truncate">{j.title || 'Medical transport'}</p>
-                          <Badge className={STATUS_CLS[j.status] || 'bg-slate-100 text-slate-600'}>{j.status.replace('_', ' ')}</Badge>
-                        </div>
-                        <p className="text-xs text-slate-500 flex items-center gap-1"><MapPin className="w-3 h-3" /> {j.delivery_address}</p>
-                        <div className="flex items-center justify-between mt-2 text-xs text-slate-500">
-                          <span>{j.recipient_name}{j.item_count ? ` · ${j.item_count} item${j.item_count > 1 ? 's' : ''}` : ''}</span>
-                          <span className="font-semibold text-slate-800">${Number(j.payout_amount ?? j.offered_price ?? 0).toFixed(2)}</span>
-                        </div>
-                      </CardContent>
-                    </Card>
-                  ))}
+                <div className="space-y-3" data-testid="facility-deliveries-list">
+                  {deliveries.map((j) => {
+                    const idx = STEP_INDEX[j.status];
+                    const isReturned = j.status === 'returned' || j.status === 'cancelled';
+                    const ping = j.last_event;
+                    return (
+                      <Card key={j.id} className="border-0 shadow-sm" data-testid={`facility-job-${j.id}`}>
+                        <CardContent className="p-4">
+                          <div className="flex items-center justify-between gap-2 mb-2">
+                            <p className="font-semibold text-slate-900 text-sm truncate">{j.title || 'Medical transport'}</p>
+                            <Badge className={STATUS_CLS[j.status] || 'bg-slate-100 text-slate-600'} data-testid={`delivery-status-${j.id}`}>{j.status.replace('_', ' ')}</Badge>
+                          </div>
+                          <p className="text-xs text-slate-500 flex items-center gap-1 mb-3"><MapPin className="w-3 h-3" /> {j.delivery_address} · {j.recipient_name}</p>
+
+                          {/* Status tracker */}
+                          {!isReturned ? (
+                            <div className="flex items-center gap-1 mb-3" data-testid={`delivery-tracker-${j.id}`}>
+                              {STEPS.map(([key, label], i) => (
+                                <div key={key} className="flex-1">
+                                  <div className={`h-1.5 rounded-full ${idx >= i ? 'bg-blue-600' : 'bg-slate-200'}`}></div>
+                                  <p className={`text-[9px] mt-1 text-center ${idx === i ? 'text-blue-700 font-semibold' : 'text-slate-400'}`}>{label}</p>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-red-600 font-medium mb-3">{j.status === 'returned' ? 'Item returned to your facility — see notifications' : 'Cancelled'}</p>
+                          )}
+
+                          {/* Driver info */}
+                          {j.driver && (
+                            <div className="flex items-center gap-2 bg-slate-50 rounded-lg px-3 py-2 mb-2" data-testid={`delivery-driver-${j.id}`}>
+                              <div className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 text-xs font-bold">
+                                {(j.driver.name || '?').charAt(0)}
+                              </div>
+                              <p className="text-xs font-medium text-slate-700">{j.driver.name}</p>
+                              <span className="flex items-center gap-0.5 text-xs text-slate-500">
+                                <Star className="w-3 h-3 text-amber-400 fill-amber-400" />
+                                {j.driver.rating_avg > 0 ? j.driver.rating_avg.toFixed(1) : 'New'}{j.driver.rating_count ? ` (${j.driver.rating_count})` : ''}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Live location */}
+                          {ping && ping.gps_lat != null && ['picked_up', 'in_transit'].includes(j.status) && (
+                            <a href={`https://www.google.com/maps?q=${ping.gps_lat},${ping.gps_lng}`} target="_blank" rel="noreferrer"
+                              className="flex items-center gap-1 text-xs text-blue-600 hover:underline mb-2" data-testid={`delivery-map-link-${j.id}`}>
+                              <Navigation2 className="w-3 h-3" /> Driver location {timeAgo(ping.timestamp)} — view on map
+                            </a>
+                          )}
+
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-semibold text-slate-800">${Number(j.payout_amount ?? j.offered_price ?? 0).toFixed(2)}</span>
+                            {['delivered', 'completed'].includes(j.status) && (
+                              <Button size="sm" variant="outline" className="rounded-full text-emerald-700 border-emerald-200 hover:bg-emerald-50 h-8"
+                                onClick={() => openPod(j)} data-testid={`view-pod-${j.id}-btn`}>
+                                <FileImage className="w-3.5 h-3.5 mr-1" /> Proof of Delivery
+                              </Button>
+                            )}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
                 </div>
               )}
             </div>
           </div>
         )}
       </main>
+
+      {/* Proof of Delivery dialog */}
+      <Dialog open={!!podJob} onOpenChange={(o) => { if (!o) { setPodJob(null); setPodEvents(null); } }}>
+        <DialogContent className="max-w-md max-h-[85vh] overflow-y-auto" data-testid="pod-dialog">
+          <DialogHeader><DialogTitle className="font-archivo">Proof of Delivery</DialogTitle></DialogHeader>
+          {!podEvents ? (
+            <div className="py-8 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div></div>
+          ) : (() => {
+            const del = podEvents.find((e) => e.event_type === 'delivered');
+            if (!del) return <p className="text-sm text-slate-500 py-4 text-center">No delivery evidence on record (legacy completion).</p>;
+            return (
+              <div className="space-y-3">
+                <div className="bg-slate-50 rounded-xl p-3 text-sm space-y-1">
+                  <p><span className="text-slate-400 text-xs uppercase tracking-wide">Received by</span><br /><span className="font-semibold text-slate-900" data-testid="pod-recipient">{del.recipient_name}</span>{del.recipient_relationship ? <span className="text-slate-500"> ({del.recipient_relationship})</span> : null}</p>
+                  <p><span className="text-slate-400 text-xs uppercase tracking-wide">Delivered at</span><br /><span className="font-medium text-slate-800" data-testid="pod-timestamp">{new Date(del.timestamp).toLocaleString('en-CA')}</span></p>
+                  {del.gps_lat != null && <p className="text-xs text-slate-400">GPS {del.gps_lat.toFixed(5)}, {del.gps_lng.toFixed(5)}</p>}
+                </div>
+                {del.evidence_url && (
+                  <div>
+                    <p className="text-xs text-slate-400 mb-1">Signature / ID capture evidence</p>
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${del.evidence_url}?auth=${token}`} alt="Proof of delivery evidence"
+                      className="rounded-lg border border-slate-200 w-full bg-white" data-testid="pod-evidence-image" />
+                  </div>
+                )}
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
