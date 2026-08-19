@@ -13,7 +13,7 @@ import {
   AlertDialogTrigger
 } from '../components/ui/alert-dialog';
 import {
-  Truck, MapPin, Clock, ArrowDown, LogOut, XCircle, Navigation,
+  Truck, MapPin, Clock, ArrowDown, LogOut, XCircle, Navigation, Phone,
   Link as LinkIcon, Snowflake, Zap, PenLine, CreditCard, Lock, Package, Building2, EyeOff
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -174,9 +174,8 @@ const JobsPage = () => {
   const categoryLabel = (job) => CATEGORY_LABELS[job.item_category] || job.goods_type || 'Medical transport';
 
   const jobFlags = (job) => {
-    const flags = [...(job.handling_flags || [])];
+    const flags = (job.handling_flags || []).filter((f) => f !== 'urgent');
     if (job.temperature_controlled && !flags.includes('cold_chain')) flags.push('cold_chain');
-    if ((job.urgency === 'urgent' || job.urgency === 'emergency') && !flags.includes('urgent')) flags.push('urgent');
     return flags.filter((f) => FLAG_META[f]);
   };
 
@@ -275,7 +274,9 @@ const JobsPage = () => {
                           </div>
                           <div className="flex flex-col items-end gap-1 shrink-0">
                             {job.status === 'offered' && (
-                              <Badge className="bg-blue-600 text-white" data-testid={`offered-badge-${job.id}`}>Offered to you</Badge>
+                              job.assigned_driver_id === user?.id
+                                ? <Badge className="bg-blue-600 text-white" data-testid={`offered-badge-${job.id}`}>Offered to you</Badge>
+                                : <Badge variant="outline" className="text-blue-600 border-blue-300" data-testid={`offered-badge-${job.id}`}>Open offer</Badge>
                             )}
                             <Badge className={urgency.bg}>{urgency.label}</Badge>
                           </div>
@@ -408,6 +409,17 @@ const JobsPage = () => {
                                     </p>
                                   </div>
                                 </div>
+                                {job.recipient_name && (
+                                  <div className="flex items-start gap-2">
+                                    <Phone className="w-4 h-4 text-blue-500 shrink-0 mt-0.5" />
+                                    <div>
+                                      <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Recipient</p>
+                                      <p className="text-sm font-medium text-slate-800" data-testid={`job-recipient-${job.id}`}>
+                                        {job.recipient_name}{job.recipient_phone ? ` · ${job.recipient_phone}` : ''}
+                                      </p>
+                                    </div>
+                                  </div>
+                                )}
                               </div>
                               <div className="flex items-center justify-between gap-3 flex-wrap">
                                 <p className="font-archivo font-bold text-2xl text-slate-900">${Number(payout).toFixed(2)}</p>

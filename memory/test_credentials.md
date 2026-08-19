@@ -25,7 +25,7 @@ Notes: Any user created with the email in `ADMIN_EMAIL` (backend/.env) is auto-p
 - Email: `facility1@test.com`
 - Password: `Facility@123`
 - Role: `facility`
-- Home: `/facility` (placeholder shell)
+- Home: `/facility` — full Facility Portal (Book Transport form + request list). Owns facility "LifeLabs Queen West" (455 Queen St W, Toronto).
 
 ## Dispatcher (test user)
 - Email: `dispatcher1@test.com`

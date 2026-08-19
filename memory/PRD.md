@@ -180,6 +180,13 @@ Build an app for medical transportation that people can register and pay a month
 - **/earnings page** (EarningsPage.js, VerifiedDriverRoute; Earnings nav link added to Dashboard/Jobs/Billing/Permits navs): dark pay-period card with net + transparent 20% commission and cancel-fee line items; lifetime stat tiles (trips, star rating, lifetime net); Trip History list (tap → read-only Chain of Custody dialog: event timeline with icons, timestamps, GPS points, recipient info, notes, and proof-of-delivery evidence image loaded via /api/delivery-evidence/{id}/file?auth=token); Cancellation Fees section
 - Self-tested: curl (math verified: $42.50 gross − $8.50 commission − $15 fee = $19 period net; facility 403) + mobile screenshots (page + custody dialog with signature evidence rendering)
 
+### Facility Portal (June 2026)
+- **/facility is now the full portal** (FacilityHomePage.js rewritten; landing "Book Transport" button routes here). Book Transport form with ONLY the allowed fields: pickup (defaults to facility address), recipient name/address/phone, item count, item category, handling-flag toggle chips, non-clinical notes (red "Do NOT enter drug names, diagnoses, or medical details" warning), requested pickup time (datetime-local). "Your Requests" list with live status badges (20s poll). Facility-setup card shown when the user has no facility profile
+- **POST /api/facility/requests** (facility/staff): validates enums, defaults pickup to facility address, estimates distance via Nominatim geocoding (retry without house number; 10km fallback stored as distance_estimated=false on the job), auto-calculates payout = max($25 min, $1.50/km) ×1.5 urgent +$15 cold_chain; job inserted status=offered with create+update audit rows (created→offered semantics)
+- **Offered pool**: driver /jobs/available now includes unassigned status=offered jobs (accept/decline handle them); recipient_name/recipient_phone masked from drivers until accept (added to DRIVER_JOB_FIELDS + reveal gate); driver Active card now shows recipient contact after accept; "Offered to you" badge only for direct assignment, "Open offer" otherwise; duplicate urgent chip removed
+- **Tested**: iteration_13 — new tests/test_facility_portal.py 10/10 (payout math exact, masking/reveal, 400/403/422 paths), full suite 167/169 (2 informational), full desktop UI flow + driver mobile regression. Post-test UI fixes applied and verified compile + suite re-run
+- Known informational notes from testing: no login brute-force lockout (backlog), CORS wildcard+credentials (backlog), server.py 2,900 lines (refactor backlog), geocode results not cached
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
