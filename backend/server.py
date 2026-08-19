@@ -450,7 +450,8 @@ DRIVER_JOB_FIELDS = {
     "urgency", "estimated_distance_km", "distance_km", "offered_price",
     "payout_amount", "notes", "special_instructions", "item_category",
     "handling_flags", "status", "created_at", "accepted_at", "picked_up_at",
-    "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id"
+    "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id",
+    "item_count", "requested_pickup_time", "recipient_name", "recipient_phone"
 }
 
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
@@ -466,6 +467,8 @@ def scoped_job(job: dict, user: dict) -> dict:
         j["pickup_address"] = None
         j["delivery_address"] = None
         j["dropoff_address"] = None
+        j["recipient_name"] = None
+        j["recipient_phone"] = None
     return j
 
 def address_area(address: Optional[str], city: Optional[str] = None) -> str:
@@ -1534,6 +1537,7 @@ async def get_available_jobs(current_user: dict = Depends(get_current_user)):
         me = current_user["id"]
         query = {"$or": [
             {"status": "open", "declined_by": {"$ne": me}},
+            {"status": "offered", "assigned_driver_id": None, "declined_by": {"$ne": me}},
             {"status": "offered", "assigned_driver_id": me}
         ]}
         rec = await db.drivers.find_one({"user_id": me}, {"_id": 0, "cold_chain_certified": 1})
@@ -1575,7 +1579,7 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    offered_to_me = job["status"] == "offered" and current_user["id"] in (job.get("assigned_driver_id"), job.get("accepted_by"))
+    offered_to_me = job["status"] == "offered" and job.get("assigned_driver_id") in (None, current_user["id"])
     if job["status"] != "open" and not offered_to_me:
         raise HTTPException(status_code=400, detail="Job is no longer available")
     
@@ -1604,7 +1608,7 @@ async def decline_job(job_id: str, current_user: dict = Depends(get_current_user
             "$set": {"status": "open", "assigned_driver_id": None, "accepted_by": None},
             "$addToSet": {"declined_by": current_user["id"]}
         })
-    elif job.get("status") == "open":
+    elif job.get("status") == "open" or (job.get("status") == "offered" and not job.get("assigned_driver_id")):
         await db.jobs.update_one({"id": job_id}, {"$addToSet": {"declined_by": current_user["id"]}})
     else:
         raise HTTPException(status_code=400, detail="Job can no longer be declined")
@@ -2702,6 +2706,134 @@ async def update_driver_verification(user_id: str, payload: VerificationUpdate, 
     await log_audit(staff, "update", "driver_verification", user_id)
     rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
     return rec
+
+# ---- Facility transport requests ----
+class FacilityRequestCreate(BaseModel):
+    pickup_address: Optional[str] = None
+    recipient_name: str
+    dropoff_address: str
+    recipient_phone: str
+    item_count: int = Field(ge=1, le=100)
+    item_category: str
+    handling_flags: List[str] = []
+    special_instructions: Optional[str] = None  # non-clinical handling notes only
+    requested_pickup_time: str
+    facility_id: Optional[str] = None
+
+CATEGORY_TITLES = {
+    "prescription": "Prescription delivery", "lab_sample": "Lab sample transport",
+    "biological": "Biological transport", "medical_equipment": "Medical equipment delivery",
+    "medical_supply": "Medical supply delivery", "other": "Medical transport"
+}
+
+def _geocode(addr: str):
+    def q(query):
+        r = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": query, "format": "json", "limit": 1, "countrycodes": "ca"},
+            headers={"User-Agent": "MediTransOntario/1.0"}, timeout=8
+        )
+        d = r.json()
+        return (float(d[0]["lat"]), float(d[0]["lon"])) if d else None
+    result = q(addr)
+    if not result:
+        # retry without the house number (area-level match)
+        parts = [p.strip() for p in addr.split(",")]
+        parts[0] = re.sub(r"^[\d\-#]+[A-Za-z]?\s+", "", parts[0]).strip() or parts[0]
+        result = q(", ".join(parts))
+    return result
+
+def _haversine_km(a, b):
+    import math
+    lat1, lon1, lat2, lon2 = map(math.radians, [a[0], a[1], b[0], b[1]])
+    h = math.sin((lat2 - lat1) / 2) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin((lon2 - lon1) / 2) ** 2
+    return 6371 * 2 * math.asin(math.sqrt(h))
+
+async def estimate_distance_km(pickup: str, dropoff: str) -> Optional[float]:
+    try:
+        p1 = await asyncio.to_thread(_geocode, pickup)
+        p2 = await asyncio.to_thread(_geocode, dropoff)
+        if p1 and p2:
+            return round(_haversine_km(p1, p2) * 1.3, 1)  # road-distance factor
+    except Exception as e:
+        logging.getLogger(__name__).warning(f"Distance estimate failed: {e}")
+    return None
+
+def _city_of(addr: str) -> str:
+    parts = [p.strip() for p in (addr or "").split(",")]
+    return parts[1] if len(parts) > 1 else ""
+
+@api_router.post("/facility/requests", status_code=201)
+async def create_facility_request(payload: FacilityRequestCreate, current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role")
+    if role not in ("facility", "admin", "dispatcher"):
+        raise HTTPException(status_code=403, detail="Facility access required")
+    validate_enum(payload.item_category, ITEM_CATEGORIES, "item_category")
+    validate_handling_flags(payload.handling_flags)
+    if payload.facility_id:
+        facility = await db.facilities.find_one({"id": payload.facility_id}, {"_id": 0})
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
+        if role == "facility" and facility.get("owner_user_id") != current_user["id"]:
+            raise HTTPException(status_code=403, detail="Not your facility")
+    else:
+        facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0})
+        if not facility:
+            raise HTTPException(status_code=400, detail="Set up your facility profile before booking transport")
+
+    pickup = payload.pickup_address or facility.get("address")
+    distance = await estimate_distance_km(pickup, payload.dropoff_address)
+    fees = await get_fees_from_db()
+    billed_km = distance if distance is not None else 10.0
+    payout = max(float(fees.get("minimum_fee", 25.0)), float(fees.get("base_rate_per_km", 1.5)) * billed_km)
+    if "urgent" in payload.handling_flags:
+        payout *= float(fees.get("urgent_multiplier", 1.5))
+    if "cold_chain" in payload.handling_flags:
+        payout += float(fees.get("temperature_controlled_fee", 15.0))
+    payout = round(payout, 2)
+
+    now = datetime.now(timezone.utc).isoformat()
+    job_id = str(uuid.uuid4())
+    job_doc = {
+        "id": job_id,
+        "title": CATEGORY_TITLES.get(payload.item_category, "Medical transport"),
+        "pickup_address": pickup,
+        "delivery_address": payload.dropoff_address,
+        "dropoff_address": payload.dropoff_address,
+        "pickup_city": _city_of(pickup),
+        "delivery_city": _city_of(payload.dropoff_address),
+        "goods_type": None,
+        "temperature_controlled": "cold_chain" in payload.handling_flags,
+        "urgency": "urgent" if "urgent" in payload.handling_flags else "standard",
+        "estimated_distance_km": billed_km,
+        "distance_km": billed_km,
+        "offered_price": payout,
+        "payout_amount": payout,
+        "notes": None,
+        "facility_id": facility["id"],
+        "item_category": payload.item_category,
+        "handling_flags": payload.handling_flags,
+        "special_instructions": payload.special_instructions,
+        "item_count": payload.item_count,
+        "recipient_name": payload.recipient_name,
+        "recipient_phone": payload.recipient_phone,
+        "requested_pickup_time": payload.requested_pickup_time,
+        "distance_estimated": distance is not None,
+        "status": "offered",
+        "posted_by": current_user["id"],
+        "accepted_by": None,
+        "assigned_driver_id": None,
+        "created_at": now,
+        "accepted_at": None,
+        "completed_at": None,
+        "picked_up_at": None,
+        "delivered_at": None
+    }
+    await db.jobs.insert_one(job_doc)
+    await log_audit(current_user, "create", "job", job_id)
+    await log_audit(current_user, "update", "job", job_id)  # created -> offered
+    job_doc.pop("_id", None)
+    return job_doc
 
 # Health check
 @api_router.get("/")

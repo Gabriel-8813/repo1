@@ -81,7 +81,7 @@ const LandingPage = () => {
                 <Button 
                   size="lg"
                   variant="outline"
-                  onClick={() => navigate('/register')}
+                  onClick={() => navigate('/facility')}
                   className="border-slate-400 text-white hover:bg-white/10 rounded-full text-lg px-8"
                   data-testid="hero-book-transport-btn"
                 >
