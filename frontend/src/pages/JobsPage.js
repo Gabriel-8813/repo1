@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { useUrgentJobAlerts } from '../hooks/useUrgentJobAlerts';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import {
@@ -12,13 +12,44 @@ import {
   AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle,
   AlertDialogTrigger
 } from '../components/ui/alert-dialog';
-import { 
-  Truck, MapPin, Clock, CheckCircle, 
-  ArrowRight, Thermometer, LogOut, XCircle, Link as LinkIcon
+import {
+  Truck, MapPin, Clock, CheckCircle, ArrowDown, LogOut, XCircle,
+  Link as LinkIcon, Snowflake, Zap, PenLine, CreditCard, Lock, Package, Building2, EyeOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+
+const CATEGORY_LABELS = {
+  prescription: 'Prescription',
+  lab_sample: 'Lab sample',
+  biological: 'Biological',
+  medical_equipment: 'Medical equipment',
+  medical_supply: 'Medical supply',
+  other: 'Medical transport'
+};
+
+const ACTIVE_STATUS_LABELS = {
+  accepted: 'Accepted',
+  in_progress: 'In Progress',
+  picked_up: 'Picked Up',
+  in_transit: 'In Transit'
+};
+
+const fullAddress = (addr, city) => {
+  if (!addr) return city || '';
+  if (city && !addr.toLowerCase().includes(city.toLowerCase())) return `${addr}, ${city}`;
+  return addr;
+};
+
+const FLAG_META = {
+  cold_chain: { icon: Snowflake, label: 'Cold chain', cls: 'bg-sky-100 text-sky-700' },
+  urgent: { icon: Zap, label: 'Urgent', cls: 'bg-amber-100 text-amber-700' },
+  signature_required: { icon: PenLine, label: 'Signature', cls: 'bg-violet-100 text-violet-700' },
+  id_required: { icon: CreditCard, label: 'ID check', cls: 'bg-indigo-100 text-indigo-700' },
+  controlled_substance: { icon: Lock, label: 'Controlled', cls: 'bg-rose-100 text-rose-700' },
+  fragile: { icon: Package, label: 'Fragile', cls: 'bg-orange-100 text-orange-700' }
+};
 
 const JobsPage = () => {
   const navigate = useNavigate();
@@ -29,23 +60,22 @@ const JobsPage = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('available');
   const [nowTick, setNowTick] = useState(Date.now());
+  const [busyJobId, setBusyJobId] = useState(null);
 
-  // Live alerts for newly posted urgent/emergency jobs (toasts + auto-refresh)
   const { newlyArrived } = useUrgentJobAlerts(token, true);
 
   useEffect(() => {
     fetchJobs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  // Auto-refresh list when a new urgent job arrives
   useEffect(() => {
     if (newlyArrived.length > 0) fetchJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [newlyArrived.length]);
 
-  // Tick every 10s to refresh cancel-grace countdowns
   useEffect(() => {
-    const t = setInterval(() => setNowTick(Date.now()), 10000);
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, []);
 
@@ -68,15 +98,33 @@ const JobsPage = () => {
   };
 
   const handleAcceptJob = async (jobId) => {
+    setBusyJobId(jobId);
     try {
       await axios.post(`${API}/jobs/${jobId}/accept`, {}, {
         headers: { Authorization: `Bearer ${token}` }
       });
-      toast.success('Job accepted — remember, free cancel within ' + (fees?.cancellation_grace_minutes || 5) + ' min');
-      fetchJobs();
+      toast.success(`Job accepted — full addresses unlocked. Free cancel within ${fees?.cancellation_grace_minutes || 5} min`);
+      await fetchJobs();
       setActiveTab('my');
     } catch (error) {
       toast.error(error.response?.data?.detail || 'Failed to accept job');
+    } finally {
+      setBusyJobId(null);
+    }
+  };
+
+  const handleDeclineJob = async (jobId) => {
+    setBusyJobId(jobId);
+    try {
+      await axios.post(`${API}/jobs/${jobId}/decline`, {}, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      setAvailableJobs((jobs) => jobs.filter((j) => j.id !== jobId));
+      toast.info('Job removed from your queue');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to decline job');
+    } finally {
+      setBusyJobId(null);
     }
   };
 
@@ -115,7 +163,6 @@ const JobsPage = () => {
       await navigator.clipboard.writeText(url);
       toast.success('Tip link copied — share it with your customer!');
     } catch {
-      // Fallback: prompt
       toast.info('Tip link: ' + url, { duration: 10000 });
     }
   };
@@ -124,7 +171,7 @@ const JobsPage = () => {
     if (!fees || !job.accepted_at) return null;
     const elapsed = (nowTick - new Date(job.accepted_at).getTime()) / 1000;
     const graceSeconds = fees.cancellation_grace_minutes * 60;
-    const remaining = graceSeconds - elapsed;
+    const remaining = Math.min(graceSeconds - elapsed, graceSeconds);
     return remaining > 0 ? Math.ceil(remaining) : 0;
   };
 
@@ -135,6 +182,15 @@ const JobsPage = () => {
       emergency: { bg: 'bg-red-100 text-red-700', label: 'Emergency' }
     };
     return styles[urgency] || styles.standard;
+  };
+
+  const categoryLabel = (job) => CATEGORY_LABELS[job.item_category] || job.goods_type || 'Medical transport';
+
+  const jobFlags = (job) => {
+    const flags = [...(job.handling_flags || [])];
+    if (job.temperature_controlled && !flags.includes('cold_chain')) flags.push('cold_chain');
+    if ((job.urgency === 'urgent' || job.urgency === 'emergency') && !flags.includes('urgent')) flags.push('urgent');
+    return flags.filter((f) => FLAG_META[f]);
   };
 
   const handleLogout = () => {
@@ -150,13 +206,13 @@ const JobsPage = () => {
     );
   }
 
-  const inProgressJobs = myJobs.filter(j => j.status === 'in_progress');
-  const completedJobs = myJobs.filter(j => j.status === 'completed');
+  const activeJobs = myJobs.filter(j => ['accepted', 'in_progress', 'picked_up', 'in_transit'].includes(j.status));
+  const completedJobs = myJobs.filter(j => j.status === 'completed' || j.status === 'delivered');
 
   return (
     <div className="min-h-screen bg-slate-50">
       <nav className="bg-white border-b border-slate-200 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4 flex items-center justify-between">
           <div className="flex items-center gap-6">
             <Link to="/dashboard" className="flex items-center gap-2">
               <div className="w-10 h-10 bg-blue-600 rounded-lg flex items-center justify-center">
@@ -178,20 +234,20 @@ const JobsPage = () => {
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className="mb-8">
-          <h1 className="font-archivo font-bold text-3xl text-slate-900">Job Board</h1>
-          <p className="text-slate-600 mt-1">
-            Browse medical transport jobs · platform takes {fees ? (fees.commission_rate * 100).toFixed(0) : 20}% on completed trips
+      <main className="max-w-2xl lg:max-w-4xl mx-auto px-4 sm:px-6 py-6 pb-24">
+        <div className="mb-6">
+          <h1 className="font-archivo font-bold text-2xl sm:text-3xl text-slate-900">Job Board</h1>
+          <p className="text-slate-600 mt-1 text-sm">
+            Medical transport jobs · platform takes {fees ? (fees.commission_rate * 100).toFixed(0) : 20}% on completed trips
           </p>
         </div>
 
         <Tabs value={activeTab} onValueChange={setActiveTab}>
-          <TabsList className="mb-6">
-            <TabsTrigger value="available" data-testid="available-jobs-tab">
-              Available Jobs ({availableJobs.length})
+          <TabsList className="mb-6 w-full sm:w-auto h-12">
+            <TabsTrigger value="available" className="flex-1 sm:flex-none h-10 px-6" data-testid="available-jobs-tab">
+              Available ({availableJobs.length})
             </TabsTrigger>
-            <TabsTrigger value="my" data-testid="my-jobs-tab">
+            <TabsTrigger value="my" className="flex-1 sm:flex-none h-10 px-6" data-testid="my-jobs-tab">
               My Jobs ({myJobs.length})
             </TabsTrigger>
           </TabsList>
@@ -202,65 +258,106 @@ const JobsPage = () => {
                 <CardContent className="py-16 text-center">
                   <Truck className="w-16 h-16 mx-auto mb-4 text-slate-300" />
                   <h3 className="text-xl font-semibold text-slate-900 mb-2">No Jobs Available</h3>
-                  <p className="text-slate-500">Check back soon for new medical transport requests</p>
+                  <p className="text-slate-500 text-sm">New medical transport requests will appear here — jobs that need cold-chain certification only show once you're certified.</p>
                 </CardContent>
               </Card>
             ) : (
-              <div className="grid gap-4">
+              <div className="space-y-4">
                 {availableJobs.map((job) => {
                   const urgency = getUrgencyBadge(job.urgency);
-                  const commissionPreview = fees ? (job.offered_price * fees.commission_rate).toFixed(2) : '0';
+                  const payout = job.payout_amount ?? job.offered_price ?? 0;
+                  const distance = job.distance_km ?? job.estimated_distance_km;
+                  const commissionPreview = fees ? (payout * fees.commission_rate) : 0;
+                  const flags = jobFlags(job);
+                  const busy = busyJobId === job.id;
                   return (
-                    <Card key={job.id} className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)] hover:shadow-[0_8px_24px_rgba(0,0,0,0.12)] transition-shadow">
-                      <CardContent className="p-6">
-                        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-3 flex-wrap">
-                              <h3 className="font-archivo font-bold text-xl text-slate-900">{job.title}</h3>
-                              <Badge className={urgency.bg}>{urgency.label}</Badge>
-                              {job.temperature_controlled && (
-                                <Badge variant="outline" className="text-blue-600 border-blue-200">
-                                  <Thermometer className="w-3 h-3 mr-1" /> Temp Controlled
-                                </Badge>
-                              )}
+                    <Card key={job.id} className="border-0 shadow-[0_2px_10px_rgba(0,0,0,0.08)]" data-testid={`available-job-card-${job.id}`}>
+                      <CardContent className="p-4 sm:p-5">
+                        <div className="flex items-start justify-between gap-3 mb-3">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center shrink-0">
+                              <Building2 className="w-5 h-5 text-blue-600" />
                             </div>
-                            <div className="flex flex-wrap items-center gap-4 text-sm text-slate-600 mb-3">
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4 text-slate-400" />
-                                {job.pickup_address}, {job.pickup_city}
-                              </span>
-                              <ArrowRight className="w-4 h-4 text-slate-400" />
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4 text-slate-400" />
-                                {job.delivery_address}, {job.delivery_city}
-                              </span>
+                            <div className="min-w-0">
+                              <p className="font-archivo font-bold text-slate-900 truncate" data-testid={`job-facility-${job.id}`}>
+                                {job.facility_name || job.title || 'Medical facility'}
+                              </p>
+                              <p className="text-xs text-slate-500" data-testid={`job-category-${job.id}`}>{categoryLabel(job)}</p>
                             </div>
-                            <div className="flex items-center gap-4 text-sm text-slate-500">
-                              <span>Distance: {job.estimated_distance_km} km</span>
-                              <span>Type: {job.goods_type}</span>
-                            </div>
-                            {job.notes && (
-                              <p className="mt-3 text-sm text-slate-600 bg-slate-50 p-3 rounded-lg">{job.notes}</p>
+                          </div>
+                          <div className="flex flex-col items-end gap-1 shrink-0">
+                            {job.status === 'offered' && (
+                              <Badge className="bg-blue-600 text-white" data-testid={`offered-badge-${job.id}`}>Offered to you</Badge>
                             )}
+                            <Badge className={urgency.bg}>{urgency.label}</Badge>
                           </div>
-                          <div className="flex flex-col items-end gap-3 min-w-[180px]">
-                            <div className="text-right">
-                              <p className="text-sm text-slate-500">Offered Price</p>
-                              <p className="font-archivo font-black text-3xl text-slate-900">
-                                ${job.offered_price.toFixed(2)}
-                              </p>
-                              <p className="text-xs text-slate-400">
-                                commission ${commissionPreview} · you keep ${(job.offered_price - commissionPreview).toFixed(2)}
-                              </p>
+                        </div>
+
+                        {flags.length > 0 && (
+                          <div className="flex flex-wrap gap-1.5 mb-3" data-testid={`job-flags-${job.id}`}>
+                            {flags.map((f) => {
+                              const meta = FLAG_META[f];
+                              const Icon = meta.icon;
+                              return (
+                                <span key={f} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium ${meta.cls}`}>
+                                  <Icon className="w-3 h-3" /> {meta.label}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        <div className="bg-slate-50 rounded-xl p-3 mb-3">
+                          <div className="flex items-start gap-2">
+                            <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Pickup area</p>
+                              <p className="text-sm font-medium text-slate-800" data-testid={`job-pickup-area-${job.id}`}>{job.pickup_area || job.pickup_city}</p>
                             </div>
-                            <Button
-                              className="bg-blue-600 hover:bg-blue-700 rounded-full px-8"
-                              onClick={() => handleAcceptJob(job.id)}
-                              data-testid={`accept-job-${job.id}-btn`}
-                            >
-                              Accept Job
-                            </Button>
                           </div>
+                          <div className="flex items-center my-1.5 ml-1">
+                            <ArrowDown className="w-3.5 h-3.5 text-slate-300" />
+                          </div>
+                          <div className="flex items-start gap-2">
+                            <MapPin className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Dropoff area</p>
+                              <p className="text-sm font-medium text-slate-800" data-testid={`job-dropoff-area-${job.id}`}>{job.dropoff_area || job.delivery_city}</p>
+                            </div>
+                          </div>
+                          <p className="flex items-center gap-1 text-[11px] text-slate-400 mt-2">
+                            <EyeOff className="w-3 h-3" /> Full addresses revealed after you accept
+                          </p>
+                        </div>
+
+                        <div className="flex items-end justify-between mb-4">
+                          <div className="text-sm text-slate-500">
+                            {distance != null && <span className="font-medium text-slate-700">{distance} km</span>}
+                          </div>
+                          <div className="text-right">
+                            <p className="font-archivo font-black text-3xl text-slate-900" data-testid={`job-payout-${job.id}`}>${Number(payout).toFixed(2)}</p>
+                            <p className="text-[11px] text-slate-400">you keep ${(payout - commissionPreview).toFixed(2)} after commission</p>
+                          </div>
+                        </div>
+
+                        <div className="flex gap-3">
+                          <Button
+                            variant="outline"
+                            className="flex-1 h-12 rounded-full text-slate-600 border-slate-300 active:scale-[0.98]"
+                            disabled={busy}
+                            onClick={() => handleDeclineJob(job.id)}
+                            data-testid={`decline-job-${job.id}-btn`}
+                          >
+                            Decline
+                          </Button>
+                          <Button
+                            className="flex-[2] h-12 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-semibold active:scale-[0.98]"
+                            disabled={busy}
+                            onClick={() => handleAcceptJob(job.id)}
+                            data-testid={`accept-job-${job.id}-btn`}
+                          >
+                            {busy ? 'Working…' : 'Accept'}
+                          </Button>
                         </div>
                       </CardContent>
                     </Card>
@@ -281,71 +378,83 @@ const JobsPage = () => {
               </Card>
             ) : (
               <div className="space-y-8">
-                {inProgressJobs.length > 0 && (
+                {activeJobs.length > 0 && (
                   <div>
-                    <h2 className="font-archivo font-bold text-lg text-slate-900 mb-4">In Progress</h2>
-                    <div className="grid gap-4">
-                      {inProgressJobs.map((job) => {
+                    <h2 className="font-archivo font-bold text-lg text-slate-900 mb-4">Active</h2>
+                    <div className="space-y-4">
+                      {activeJobs.map((job) => {
                         const graceLeft = getGraceRemaining(job);
                         const freeCancel = graceLeft > 0;
+                        const payout = job.payout_amount ?? job.offered_price ?? 0;
                         return (
-                          <Card key={job.id} className="border-2 border-blue-200 bg-blue-50/50">
-                            <CardContent className="p-6">
-                              <div className="flex flex-col md:flex-row md:items-start justify-between gap-4">
-                                <div className="flex-1">
-                                  <div className="flex items-center gap-2 mb-2 flex-wrap">
-                                    <h3 className="font-archivo font-bold text-lg text-slate-900">{job.title}</h3>
-                                    <Badge className="bg-blue-100 text-blue-700">In Progress</Badge>
-                                    {graceLeft !== null && (
-                                      <Badge className={freeCancel ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'} data-testid={`grace-badge-${job.id}`}>
-                                        {freeCancel
-                                          ? `Free cancel: ${Math.floor(graceLeft / 60)}:${String(graceLeft % 60).padStart(2, '0')}`
-                                          : `Cancel fee applies ($${fees?.cancellation_fee.toFixed(2)})`
-                                        }
-                                      </Badge>
-                                    )}
+                          <Card key={job.id} className="border-2 border-blue-200 bg-blue-50/50" data-testid={`active-job-card-${job.id}`}>
+                            <CardContent className="p-4 sm:p-5">
+                              <div className="flex items-center gap-2 mb-3 flex-wrap">
+                                <h3 className="font-archivo font-bold text-lg text-slate-900">{job.title || categoryLabel(job)}</h3>
+                                <Badge className="bg-blue-100 text-blue-700">{ACTIVE_STATUS_LABELS[job.status] || 'Active'}</Badge>
+                                {graceLeft !== null && (
+                                  <Badge className={freeCancel ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'} data-testid={`grace-badge-${job.id}`}>
+                                    {freeCancel
+                                      ? `Free cancel: ${Math.floor(graceLeft / 60)}:${String(graceLeft % 60).padStart(2, '0')}`
+                                      : `Cancel fee applies ($${fees?.cancellation_fee.toFixed(2)})`
+                                    }
+                                  </Badge>
+                                )}
+                              </div>
+                              <div className="bg-white rounded-xl p-3 mb-4 space-y-2">
+                                <div className="flex items-start gap-2">
+                                  <MapPin className="w-4 h-4 text-emerald-600 shrink-0 mt-0.5" />
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Pickup</p>
+                                    <p className="text-sm font-medium text-slate-800" data-testid={`job-pickup-full-${job.id}`}>
+                                      {fullAddress(job.pickup_address, job.pickup_city)}
+                                    </p>
                                   </div>
-                                  <p className="text-sm text-slate-600">
-                                    {job.pickup_city} → {job.delivery_city} • {job.estimated_distance_km} km
-                                  </p>
                                 </div>
-                                <div className="flex flex-col items-end gap-2">
-                                  <p className="font-archivo font-bold text-2xl text-slate-900">
-                                    ${job.offered_price.toFixed(2)}
-                                  </p>
-                                  <div className="flex gap-2">
-                                    <AlertDialog>
-                                      <AlertDialogTrigger asChild>
-                                        <Button variant="outline" className="rounded-full text-red-600 border-red-200 hover:bg-red-50" data-testid={`cancel-job-${job.id}-btn`}>
-                                          <XCircle className="w-4 h-4 mr-2" /> Cancel
-                                        </Button>
-                                      </AlertDialogTrigger>
-                                      <AlertDialogContent>
-                                        <AlertDialogHeader>
-                                          <AlertDialogTitle>Cancel this job?</AlertDialogTitle>
-                                          <AlertDialogDescription>
-                                            {freeCancel
-                                              ? `You're still within the ${fees?.cancellation_grace_minutes}-minute grace window — no fee will be charged.`
-                                              : `Grace window has expired. A $${fees?.cancellation_fee.toFixed(2)} late-cancellation fee will be added to your balance.`
-                                            }
-                                          </AlertDialogDescription>
-                                        </AlertDialogHeader>
-                                        <AlertDialogFooter>
-                                          <AlertDialogCancel>Keep Job</AlertDialogCancel>
-                                          <AlertDialogAction onClick={() => handleCancelJob(job.id)} className="bg-red-600 hover:bg-red-700" data-testid={`confirm-cancel-${job.id}-btn`}>
-                                            Cancel Job
-                                          </AlertDialogAction>
-                                        </AlertDialogFooter>
-                                      </AlertDialogContent>
-                                    </AlertDialog>
-                                    <Button
-                                      className="bg-emerald-600 hover:bg-emerald-700 rounded-full"
-                                      onClick={() => handleCompleteJob(job.id)}
-                                      data-testid={`complete-job-${job.id}-btn`}
-                                    >
-                                      <CheckCircle className="w-4 h-4 mr-2" /> Complete
-                                    </Button>
+                                <div className="flex items-start gap-2">
+                                  <MapPin className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
+                                  <div>
+                                    <p className="text-[11px] uppercase tracking-wide text-slate-400 font-semibold">Dropoff</p>
+                                    <p className="text-sm font-medium text-slate-800" data-testid={`job-dropoff-full-${job.id}`}>
+                                      {fullAddress(job.delivery_address, job.delivery_city)}
+                                    </p>
                                   </div>
+                                </div>
+                              </div>
+                              <div className="flex items-center justify-between gap-3 flex-wrap">
+                                <p className="font-archivo font-bold text-2xl text-slate-900">${Number(payout).toFixed(2)}</p>
+                                <div className="flex gap-2">
+                                  <AlertDialog>
+                                    <AlertDialogTrigger asChild>
+                                      <Button variant="outline" className="h-11 rounded-full text-red-600 border-red-200 hover:bg-red-50" data-testid={`cancel-job-${job.id}-btn`}>
+                                        <XCircle className="w-4 h-4 mr-2" /> Cancel
+                                      </Button>
+                                    </AlertDialogTrigger>
+                                    <AlertDialogContent>
+                                      <AlertDialogHeader>
+                                        <AlertDialogTitle>Cancel this job?</AlertDialogTitle>
+                                        <AlertDialogDescription>
+                                          {freeCancel
+                                            ? `You're still within the ${fees?.cancellation_grace_minutes}-minute grace window — no fee will be charged.`
+                                            : `Grace window has expired. A $${fees?.cancellation_fee.toFixed(2)} late-cancellation fee will be added to your balance.`
+                                          }
+                                        </AlertDialogDescription>
+                                      </AlertDialogHeader>
+                                      <AlertDialogFooter>
+                                        <AlertDialogCancel>Keep Job</AlertDialogCancel>
+                                        <AlertDialogAction onClick={() => handleCancelJob(job.id)} className="bg-red-600 hover:bg-red-700" data-testid={`confirm-cancel-${job.id}-btn`}>
+                                          Cancel Job
+                                        </AlertDialogAction>
+                                      </AlertDialogFooter>
+                                    </AlertDialogContent>
+                                  </AlertDialog>
+                                  <Button
+                                    className="h-11 bg-emerald-600 hover:bg-emerald-700 rounded-full"
+                                    onClick={() => handleCompleteJob(job.id)}
+                                    data-testid={`complete-job-${job.id}-btn`}
+                                  >
+                                    <CheckCircle className="w-4 h-4 mr-2" /> Complete
+                                  </Button>
                                 </div>
                               </div>
                             </CardContent>
@@ -359,19 +468,19 @@ const JobsPage = () => {
                 {completedJobs.length > 0 && (
                   <div>
                     <h2 className="font-archivo font-bold text-lg text-slate-900 mb-4">Completed</h2>
-                    <div className="grid gap-4">
+                    <div className="space-y-4">
                       {completedJobs.map((job) => (
                         <Card key={job.id} className="border-0 shadow-sm bg-slate-50">
-                          <CardContent className="p-6 flex items-center justify-between gap-4 flex-wrap">
+                          <CardContent className="p-4 sm:p-5 flex items-center justify-between gap-4 flex-wrap">
                             <div className="flex-1 min-w-0">
                               <div className="flex items-center gap-2 mb-2">
-                                <h3 className="font-semibold text-slate-700">{job.title}</h3>
+                                <h3 className="font-semibold text-slate-700">{job.title || categoryLabel(job)}</h3>
                                 <Badge className="bg-slate-200 text-slate-600">Completed</Badge>
                               </div>
-                              <p className="text-sm text-slate-500">{job.pickup_city} → {job.delivery_city}</p>
+                              <p className="text-sm text-slate-500">{job.pickup_city || job.pickup_area} → {job.delivery_city || job.dropoff_area}</p>
                             </div>
                             <div className="flex items-center gap-3">
-                              <p className="font-archivo font-bold text-xl text-slate-600">${job.offered_price.toFixed(2)}</p>
+                              <p className="font-archivo font-bold text-xl text-slate-600">${Number(job.payout_amount ?? job.offered_price ?? 0).toFixed(2)}</p>
                               <Button
                                 variant="outline"
                                 size="sm"

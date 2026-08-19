@@ -8,8 +8,10 @@ import time
 import uuid
 import pytest
 import requests
+from dotenv import dotenv_values
 
-BASE_URL = os.environ.get("REACT_APP_BACKEND_URL").rstrip("/")
+_env = dotenv_values("/app/frontend/.env")
+BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _env.get("REACT_APP_BACKEND_URL")).rstrip("/")
 API = f"{BASE_URL}/api"
 
 ADMIN = ("gabrielosmanhamza@yahoo.com", "Admin@123")
@@ -212,7 +214,7 @@ class TestDriverVerification:
         try:
             ar = requests.post(f"{API}/jobs/{jid}/accept", headers=_hdr(drv_tok))
             assert ar.status_code == 200, ar.text
-            assert ar.json()["job"]["status"] == "in_progress"
+            assert ar.json()["job"]["status"] == "accepted"
             # complete → commission ledger
             comp = requests.post(f"{API}/jobs/{jid}/complete", headers=_hdr(drv_tok))
             assert comp.status_code == 200, comp.text

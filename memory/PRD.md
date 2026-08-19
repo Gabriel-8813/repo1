@@ -152,6 +152,14 @@ Build an app for medical transportation that people can register and pay a month
 - **Hardening after review**: server-side guard blocks overall approval while required docs are missing/rejected (400); user deletion cascades driver record + documents + storage blobs; every upload/view/review audit-logged
 - **Tested**: iteration_10 — 18/18 onboarding pytest + 30/30 RBAC + full Playwright E2E (mobile 390px), all passed. Full backend suite now 126/126 (stale pre-pivot test_admin.py quarantined to tests_legacy/ — it mutated driver1's role and tested removed /admin/plans; commission tests updated to post jobs as admin since drivers can no longer POST /jobs)
 
+### Driver Available Jobs Screen (June 2026)
+- **Mobile-first Available tab in /jobs** (JobsPage.js rewritten): cards show facility name + item category label, handling-flag icon chips (cold chain/urgent/signature/ID check/controlled/fragile), pickup/dropoff AREA only (street + city, house number stripped) with "Full addresses revealed after you accept" note, distance + payout (with net-after-commission hint), large one-handed Accept/Decline buttons
+- **Hybrid pool** (user choice): GET /jobs/available for drivers = open jobs not declined by them + status=offered jobs assigned to them; cold-chain jobs (flag or temperature_controlled) hidden unless driver cold_chain_certified; facility_name joined; addresses masked (pickup_area/dropoff_area via address_area()); no posted_by/declined_by leak
+- **Accept** now sets status="accepted" (replaced legacy "in_progress"; cancel/complete/stats accept both), stamps accepted_at + accepted_by/assigned_driver_id, reveals full addresses (REVEALED_JOB_STATUSES gate in scoped_job), starts the 5-min free-cancel countdown (1s tick, clamped). **Decline**: POST /jobs/{id}/decline adds driver to declined_by (offered jobs revert to open+unassigned); audit-logged
+- **My Jobs tab**: real status badges (Accepted/In Progress/Picked Up/In Transit), full addresses with city dedupe, cancel dialog + complete + tip link preserved
+- **Fixes from testing (iteration_11)**: HIGH — /payments/balance/checkout 500 with 13+ ledger entries (Stripe 500-char metadata cap; now passes ledger_count only, settlement always used the payment_transactions doc) — verified 200 with 16 entries; dashboard mobile overflow fixed (icon-only nav buttons on mobile, responsive balance alert + jobs widget with masked areas/payout fallback); **patched platform babel plugin** (/app/frontend/plugins/visual-edits/babel-metadata-plugin.js line 876 null-guard) which crashed builds on cross-file prop tracing
+- **Tested**: 12 new pytest cases (tests/test_driver_available_jobs.py) + full suite 138/138 green; Playwright mobile E2E (accept→reveal→grace countdown→cancel, decline removal) verified
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
