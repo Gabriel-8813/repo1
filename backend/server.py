@@ -2835,6 +2835,34 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
     job_doc.pop("_id", None)
     return job_doc
 
+@api_router.get("/facility/deliveries")
+async def facility_deliveries(current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role")
+    if role not in ("facility", "admin", "dispatcher"):
+        raise HTTPException(status_code=403, detail="Facility access required")
+    if role == "facility":
+        fac_ids = await facility_ids_owned_by(current_user["id"])
+        query = {"$or": [{"posted_by": current_user["id"]}, {"facility_id": {"$in": fac_ids}}]}
+    else:
+        query = {}
+    jobs = await db.jobs.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    driver_ids = list({j.get("assigned_driver_id") or j.get("accepted_by") for j in jobs if j.get("assigned_driver_id") or j.get("accepted_by")})
+    users = await db.users.find({"id": {"$in": driver_ids}}, {"_id": 0, "id": 1, "full_name": 1}).to_list(200)
+    names = {u["id"]: u["full_name"] for u in users}
+    ratings = {}
+    for did in driver_ids:
+        ratings[did] = await _compute_driver_rating(did)
+    out = []
+    for j in jobs:
+        did = j.get("assigned_driver_id") or j.get("accepted_by")
+        last_ev = await db.custody_events.find_one({"job_id": j["id"]}, {"_id": 0}, sort=[("timestamp", -1)])
+        out.append({
+            **j,
+            "driver": ({"name": names.get(did) or "Driver (deactivated)", "rating_avg": ratings.get(did, {}).get("avg", 0), "rating_count": ratings.get(did, {}).get("count", 0)} if did else None),
+            "last_event": last_ev
+        })
+    return {"deliveries": out}
+
 # Health check
 @api_router.get("/")
 async def root():
