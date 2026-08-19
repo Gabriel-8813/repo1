@@ -31,7 +31,7 @@ Notes: Any user created with the email in `ADMIN_EMAIL` (backend/.env) is auto-p
 - Email: `dispatcher1@test.com`
 - Password: `Dispatch@123`
 - Role: `dispatcher`
-- Home: `/dispatch` (placeholder shell)
+- Home: `/dispatch` — full Kanban operations board (Open Pool → Offered → Accepted → Picked Up → In Transit → Delivered → Exceptions) with assign/reassign, cancel-with-confirm, custody timelines.
 
 ## RBAC notes
 - Drivers with no approved driver record (verification_status != approved) get 403 on `POST /api/jobs/{id}/accept` and cannot be assigned via `PUT /api/jobs/{id}`.

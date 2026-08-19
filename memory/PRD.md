@@ -199,6 +199,12 @@ Build an app for medical transportation that people can register and pay a month
 - **Portal now has tabs**: "Book & Track" (form + My Deliveries dashboard) and "Billing" (month picker, statement table with subtotal/HST/total footer, CSV + PDF export buttons)
 - Self-tested: HST math asserted ($42.50 → $5.53 → $48.03), CSV content, valid %PDF-1.4 output, driver 403, UI screenshot of the tab
 
+### Dispatcher Console — Kanban Operations Board (June 2026)
+- **GET /api/dispatch/board** (staff only: dispatcher/admin; driver/facility 403): all jobs enriched with facility_name, driver_name, status_since (offered_at/accepted_at/picked_up_at/delivered_at/cancelled_at aware) + approved_drivers list
+- **PUT /api/jobs/{id}** dispatcher assign/reassign ({assigned_driver_id, status:'offered'} sets offered_at; accepted_by only set at real acceptance or post-acceptance reassign, cleared on re-offer), cancel sets cancelled_at; unverified driver assign → 400
+- **Frontend /dispatch** (desktop-first, RoleRoute dispatcher/admin): 7 columns (Open Pool, Offered, Accepted, Picked Up, In Transit, Delivered, Exceptions), 10s polling, job dialog with custody timeline, assign/reassign select, cancel with confirm step, red (urgent/exception) vs amber (stale) highlighting + legend, toast offset below header
+- Tested: iterations 14 & 15 — backend 20/20 dispatch tests, frontend all flows verified, regressions green
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
@@ -225,8 +231,9 @@ Build an app for medical transportation that people can register and pay a month
 - [ ] API for third-party integrations
 
 ## Next Tasks
-1. Add job creation functionality for clients/admins
-2. Implement real-time job matching notifications
-3. Add document upload for permit verification
-4. Build mobile-responsive improvements
-5. Add driver-client messaging
+1. Rate-limit "Forgot password" emails (max 3 per 10 min) — abuse protection (P1)
+2. "Pay Statement" button in Facility Billing tab via Stripe (P1)
+3. Refactor server.py (~3,100 lines) into routers/models/services (P1)
+4. Brute-force lockout on /api/auth/login (P1, flagged by testing iterations 13-15)
+5. Stripe live keys + production RESEND_API_KEY when going live (P2)
+6. Push notifications for urgent jobs via Capacitor (P2)

@@ -238,7 +238,7 @@ function App() {
     <BrowserRouter>
       <AuthProvider>
         <AppRoutes />
-        <Toaster position="top-right" richColors />
+        <Toaster position="top-right" richColors offset={64} />
       </AuthProvider>
     </BrowserRouter>
   );

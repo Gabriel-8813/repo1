@@ -2200,10 +2200,17 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
     if "distance_km" in updates:
         updates["estimated_distance_km"] = updates["distance_km"]
     if "assigned_driver_id" in updates:
-        updates["accepted_by"] = updates["assigned_driver_id"]
+        effective_status = new_status or job.get("status")
+        post_accept = effective_status in ("accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed")
+        updates["accepted_by"] = updates["assigned_driver_id"] if post_accept else None
     now = datetime.now(timezone.utc).isoformat()
+    if new_status == "offered":
+        updates["offered_at"] = now
+    elif new_status == "cancelled":
+        updates["cancelled_at"] = now
     if new_status == "accepted" and not job.get("accepted_at"):
         updates["accepted_at"] = now
+        updates.setdefault("accepted_by", target_driver)
     elif new_status == "picked_up":
         updates["picked_up_at"] = now
     elif new_status in ("delivered", "completed"):
@@ -2987,6 +2994,31 @@ async def facility_billing_export(request: Request, month: Optional[str] = None,
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"attachment; filename={fname}.pdf"})
     raise HTTPException(status_code=422, detail="format must be csv or pdf")
+
+@api_router.get("/dispatch/board")
+async def dispatch_board(staff: dict = Depends(require_staff)):
+    jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(300)
+    fac_ids = list({j["facility_id"] for j in jobs if j.get("facility_id")})
+    fac_names = {f["id"]: f["name"] async for f in db.facilities.find({"id": {"$in": fac_ids}}, {"_id": 0, "id": 1, "name": 1})}
+    driver_ids = list({j.get("assigned_driver_id") or j.get("accepted_by") for j in jobs if j.get("assigned_driver_id") or j.get("accepted_by")})
+    names = {u["id"]: u["full_name"] async for u in db.users.find({"id": {"$in": driver_ids}}, {"_id": 0, "id": 1, "full_name": 1})}
+    for j in jobs:
+        j["facility_name"] = fac_names.get(j.get("facility_id"))
+        did = j.get("assigned_driver_id") or j.get("accepted_by")
+        j["driver_name"] = names.get(did) if did else None
+        j["status_since"] = (
+            j.get("delivered_at") if j["status"] in ("delivered", "completed", "returned") else
+            j.get("cancelled_at") if j["status"] == "cancelled" else
+            j.get("picked_up_at") if j["status"] in ("picked_up", "in_transit") else
+            j.get("accepted_at") if j["status"] in ("accepted", "in_progress") else
+            j.get("offered_at") if j["status"] == "offered" else
+            j.get("created_at")
+        ) or j.get("created_at")
+    recs = await db.drivers.find({"verification_status": "approved"}, {"_id": 0, "user_id": 1}).to_list(200)
+    duids = [r["user_id"] for r in recs]
+    dnames = {u["id"]: u["full_name"] async for u in db.users.find({"id": {"$in": duids}, "role": "driver"}, {"_id": 0, "id": 1, "full_name": 1})}
+    approved_drivers = [{"user_id": uid, "name": dnames[uid]} for uid in duids if uid in dnames]
+    return {"jobs": jobs, "approved_drivers": approved_drivers}
 
 # Health check
 @api_router.get("/")

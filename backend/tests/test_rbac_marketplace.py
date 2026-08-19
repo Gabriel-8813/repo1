@@ -255,7 +255,9 @@ class TestJobUpdateRBAC:
                               headers=_hdr(admin_tok))
             assert ur.status_code == 200, ur.text
             assert ur.json().get("assigned_driver_id") == drv_id
-            assert ur.json().get("accepted_by") == drv_id
+            # iteration_15 semantics: accepted_by is only set when the driver actually
+            # accepts (or when staff sets status='accepted'); assigning alone must not set it.
+            assert ur.json().get("accepted_by") in (None, "")
         finally:
             requests.delete(f"{API}/jobs/{jid}", headers=_hdr(admin_tok))
 
