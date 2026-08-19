@@ -1189,6 +1189,90 @@ async def get_driver_tips(current_user: dict = Depends(get_current_user)):
     total = round(sum(t.get("amount", 0) for t in tips), 2)
     return {"tips": tips, "total": total, "count": len(tips), "currency": "CAD"}
 
+@api_router.get("/driver/earnings")
+async def driver_earnings(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Driver access required")
+    me = current_user["id"]
+    jobs = await db.jobs.find(
+        {"$or": [{"accepted_by": me}, {"assigned_driver_id": me}],
+         "status": {"$in": ["completed", "delivered", "returned"]}},
+        {"_id": 0}
+    ).sort("completed_at", -1).to_list(500)
+    ledger = await db.ledger.find({"driver_id": me}, {"_id": 0}).to_list(2000)
+    commission_by_job = {}
+    cancellation_fees = []
+    for e in ledger:
+        if e.get("type") == "commission":
+            commission_by_job[e.get("job_id")] = commission_by_job.get(e.get("job_id"), 0) + float(e.get("amount", 0))
+        elif e.get("type") == "cancellation_fee":
+            cancellation_fees.append(e)
+
+    fees_cfg = await get_fees_from_db()
+    commission_rate = float(fees_cfg.get("commission_rate", 0.20))
+
+    # Current pay period: Monday 00:00 UTC of this week
+    now = datetime.now(timezone.utc)
+    period_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    period_start_iso = period_start.isoformat()
+
+    trips = []
+    lifetime_gross = lifetime_commission = 0.0
+    period_gross = period_commission = 0.0
+    for j in jobs:
+        gross = float(j.get("payout_amount") or j.get("offered_price") or 0)
+        if j.get("status") == "returned":
+            trips.append({
+                "job_id": j["id"], "title": j.get("title"), "item_category": j.get("item_category"),
+                "pickup_city": j.get("pickup_city"), "delivery_city": j.get("delivery_city"),
+                "status": "returned", "completed_at": j.get("delivered_at") or j.get("completed_at") or j.get("created_at"),
+                "gross": 0.0, "commission": 0.0, "net": 0.0
+            })
+            continue
+        commission = round(commission_by_job.get(j["id"], gross * commission_rate), 2)
+        net = round(gross - commission, 2)
+        done_at = j.get("completed_at") or j.get("delivered_at")
+        trips.append({
+            "job_id": j["id"], "title": j.get("title"), "item_category": j.get("item_category"),
+            "pickup_city": j.get("pickup_city"), "delivery_city": j.get("delivery_city"),
+            "status": j.get("status"), "completed_at": done_at,
+            "gross": gross, "commission": commission, "net": net
+        })
+        lifetime_gross += gross
+        lifetime_commission += commission
+        if done_at and done_at >= period_start_iso:
+            period_gross += gross
+            period_commission += commission
+
+    period_fees = sum(float(f.get("amount", 0)) for f in cancellation_fees if f.get("created_at", "") >= period_start_iso)
+    lifetime_fees = sum(float(f.get("amount", 0)) for f in cancellation_fees)
+
+    rec = await db.drivers.find_one({"user_id": me}, {"_id": 0})
+    rating = await _compute_driver_rating(me)
+    return {
+        "trips": trips,
+        "cancellation_fees": sorted(cancellation_fees, key=lambda f: f.get("created_at", ""), reverse=True),
+        "commission_rate": commission_rate,
+        "period": {
+            "start": period_start_iso,
+            "gross": round(period_gross, 2),
+            "commission": round(period_commission, 2),
+            "cancellation_fees": round(period_fees, 2),
+            "net": round(period_gross - period_commission - period_fees, 2),
+            "trip_count": sum(1 for t in trips if t["status"] != "returned" and (t["completed_at"] or "") >= period_start_iso)
+        },
+        "lifetime": {
+            "total_trips": (rec or {}).get("total_trips", 0),
+            "rating_avg": rating["avg"],
+            "rating_count": rating["count"],
+            "gross": round(lifetime_gross, 2),
+            "commission": round(lifetime_commission, 2),
+            "cancellation_fees": round(lifetime_fees, 2),
+            "net": round(lifetime_gross - lifetime_commission - lifetime_fees, 2)
+        },
+        "currency": "CAD"
+    }
+
 # ======================
 # Driver Ratings & Reviews
 # ======================
