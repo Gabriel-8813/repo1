@@ -1,0 +1,50 @@
+{
+  "summary": "Iteration 15 — re-verification of all 9 iteration_14 fixes for the Dispatcher Console. BACKEND: existing tests/test_dispatch_console.py re-run green (14/14). New suite tests/test_dispatch_offer_semantics.py (6/6 pass) verifies FIX 1 + FIX 2 end-to-end: (a) PUT /api/jobs/{id} {assigned_driver_id,status:'offered'} returns and persists accepted_by=null with assigned_driver_id set; (b) REGRESSION — the targeted driver still sees the offered job in GET /api/jobs/my, GET /api/jobs and GET /api/jobs/{id} (200) and POST /api/jobs/{id}/accept sets accepted_by=assigned_driver_id=driver, status='accepted'; (c) re-offering an already-accepted job clears accepted_by back to null; (d) staff PUT {assigned_driver_id,status:'accepted'} sets accepted_by + accepted_at; (e) offering sets offered_at and /api/dispatch/board status_since == offered_at (age clock resets, verified '0m' on the card in the UI); (f) cancelling sets cancelled_at and status_since == cancelled_at. Full backend suite: 187 passed / 2 failed — 1 is the known pre-existing missing brute-force lockout, the other (test_rbac_marketplace::test_put_assign_verified_driver_syncs_accepted_by) was an OBSOLETE assertion of the old accepted_by-at-offer behaviour, which I updated to the new semantics (test-code only); the 4 related modules then pass 62/62. FRONTEND (1920x1080, dispatcher1): FIX 3 exactly 7 columns, first is column-open-pool holding open/created jobs, column-offered holds only status 'offered' (0 before assign, 1 after), no column-created in the DOM. FIX 4 cards show bold title (or Job #shortid) plus 'facility_name · category' subline — 'TEST_UI15 Job 1/2/3' and 'LifeLabs Queen West · lab sample' render distinctly. FIX 5 dispatch-cancel-btn now reveals dispatch-cancel-abort-btn + dispatch-cancel-confirm-btn; abort restores the normal button with no cancellation; confirm cancels (toast 'Job cancelled', card moves to Exceptions with a fresh 0m clock). FIX 6 console captured on dialog open and through all flows: NO '<div> cannot be a descendant of <p>' and NO 'Missing Description/aria-describedby for DialogContent' warnings (0 console errors at all). FIX 7 with a sonner toast visible (offset 64px, top-right, below the sticky header) role-home-logout-btn stays visible and hoverable/clickable. FIX 8 board-legend row renders 'Urgent / exception' (red) + 'Stale — no progress' (amber); urgent/cancelled cards get red border+red dot, 1h29m-old open jobs get amber border+amber dot. FIX 9 with the dialog open, a server-side status change (offered -> picked_up via API) was picked up by the 10s poll: the dialog's status badge updated to 'picked up' while staying open, and the card moved to the Picked Up column. REGRESSION: dispatcher login lands on the board; assign flow works (select driver -> assign-driver-btn -> toast 'Job offered to driver' -> card in Offered with 'Driver One'); driver1 /jobs shows the offered job with an 'Offered to you' badge and Accept works (job appears under My Jobs as Accepted); facility1 /facility Portal loads (Book Transport form + tabs). Auth playbook spot-checks: password_hash starts with $2b$12$ (OK); no app httpOnly auth cookie (Bearer token in localStorage — pre-existing design); CORS still allow_origins='*' with allow_credentials=True; still no brute-force lockout. All TEST_UI15 jobs deleted — board back to the 5-job demo baseline.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout after 5 failed attempts (test_auth_hardening::test_brute_force_lockout_after_5_failures still fails). Pre-existing since iteration 13."},
+      {"endpoint": "CORS middleware (server.py:3032)", "issue": "allow_origins=['*'] with allow_credentials=True is invalid per the fetch spec; harmless today (Bearer auth, no session cookie) but violates the auth playbook 'explicit origins' rule."},
+      {"endpoint": "PUT /api/jobs/{job_id}", "issue": "Edge case of the new accepted_by rule: if staff send only {assigned_driver_id} while a job is in picked_up/in_transit, accepted_by is nulled (effective_status != 'accepted'). Access still works via assigned_driver_id, but earnings/history queries keyed on accepted_by could miss the job. Consider preserving accepted_by for post-acceptance statuses."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/dispatch board", "issues": ["Toast at offset 64px no longer covers the header, but it does sit on top of the Delivered/Exceptions column headers and their count badges on a 1920px board — consider bottom-right or a lower z-index than the columns", "Demo seed data still has two jobs both titled 'Medical Transport' from the same facility; they are now distinguishable only by category/flags — a short job id suffix would help", "Assign control is still a native <select> (assign-driver-select) instead of the shadcn Select used elsewhere; still no search/filter on the board and no dedicated Close button in the dialog (X/Escape only). Carried over from iteration_14 as low-priority polish."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_dispatch_offer_semantics.py",
+    "/app/backend/tests/test_dispatch_console.py",
+    "/app/test_reports/pytest/it15_offer.xml",
+    "/app/test_reports/pytest/it15_dispatch.xml",
+    "/app/test_reports/pytest/it15_full.xml"
+  ],
+  "action_items": [
+    "Nothing blocking — all 9 reported fixes verified working.",
+    "Optional: implement brute-force lockout on /api/auth/login (playbook requirement, still missing).",
+    "Optional: set CORS_ORIGINS to explicit origins instead of '*' while allow_credentials=True.",
+    "Optional: keep accepted_by intact when only assigned_driver_id is updated on a job already past 'accepted'.",
+    "Optional polish: move toasts so they do not overlap the right-hand board columns."
+  ],
+  "critical_code_review_comments": [
+    "server.py is ~3100 lines — still should be split into routers (auth, jobs, dispatch, facility, admin, payments).",
+    "GET /api/dispatch/board still loads up to 300 jobs with no status/date filter and re-runs every 10s per dispatcher; add server-side filtering/pagination before job volume grows.",
+    "load() in DispatchHomePage now re-syncs the selected job from the poll result (good), but the poll still refetches the whole board; consider a lightweight delta/ETag endpoint.",
+    "test_rbac_marketplace::test_put_assign_verified_driver_syncs_accepted_by asserted the pre-fix accepted_by semantics; I updated the assertion — keep this in mind if the semantics are revisited."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_dispatch_offer_semantics.py",
+    "/app/backend/tests/test_rbac_marketplace.py",
+    "/app/test_reports/mk_it15_jobs.py"
+  ],
+  "success_rate": {"backend": "100% of dispatch/offer-semantics tests (20/20); full suite 188/189 after the obsolete-assertion update (1 known missing brute-force lockout)", "frontend": "100% — all 9 fixes (FIX 1 driver regression, FIX 2-9) plus assign/cancel/driver/facility regressions verified"},
+  "seed_data_creation": "3 temporary jobs 'TEST_UI15 Job 1/2/3' (one with urgent flag) created via dispatcher POST /api/jobs, used for offer/cancel/poll/driver-accept flows, then deleted via admin DELETE /api/jobs/{id}; board verified back to the 5 demo jobs. Helper script kept at /app/test_reports/mk_it15_jobs.py.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md accurate. Line 34 still calls /dispatch a 'placeholder shell' — it is the full Kanban console; please update.",
+  "context_for_next_testing_agent": "All iteration_14 dispatch console issues are fixed and verified. Reusable suites: test_dispatch_console.py (14 tests) and the new test_dispatch_offer_semantics.py (6 tests, module-scoped cleanup — keep module scope so jobs do not leak into test_driver_available_jobs). New accepted_by semantics: null at offer, set only on POST /accept or staff status='accepted'. status_since on /api/dispatch/board uses offered_at for 'offered' and cancelled_at for 'cancelled'. Board column testids: column-open-pool, column-offered, column-accepted, column-picked-up, column-in-transit, column-delivered, column-exceptions. Cancel needs dispatch-cancel-btn then dispatch-cancel-confirm-btn. Only outstanding backend gaps are pre-existing: no login lockout, CORS '*' with credentials.",
+  "rca_of_the_issue": "No new defects. The only new-looking failure (test_rbac_marketplace::test_put_assign_verified_driver_syncs_accepted_by) was an outdated test expectation, not a product bug: it asserted accepted_by == driver after a bare assigned_driver_id update, which is exactly the behaviour FIX 1 intentionally removed. Assertion updated to the new contract and the module now passes."
+}
