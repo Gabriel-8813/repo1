@@ -129,9 +129,10 @@ class TestFeeAgreement:
 
 # ---------- Commission flow ----------
 class TestCommissionFlow:
-    def test_driver_accept_complete_creates_commission(self, driver_token, driver_id):
+    def test_driver_accept_complete_creates_commission(self, driver_token, driver_id, admin_token):
         h = {"Authorization": f"Bearer {driver_token}"}
-        # create job (drivers can post jobs — used in app)
+        ha = {"Authorization": f"Bearer {admin_token}"}
+        # create job (drivers can no longer post jobs — staff/facility post)
         job_payload = {
             "title": "TEST Commission Run",
             "pickup_address": "1 Test St", "delivery_address": "2 Test Ave",
@@ -139,7 +140,7 @@ class TestCommissionFlow:
             "goods_type": "medical_sample", "temperature_controlled": False,
             "urgency": "standard", "estimated_distance_km": 100, "offered_price": 200.00
         }
-        r = requests.post(f"{API}/jobs", headers=h, json=job_payload, timeout=10)
+        r = requests.post(f"{API}/jobs", headers=ha, json=job_payload, timeout=10)
         assert r.status_code == 200, r.text
         job_id = r.json()["id"]
 
@@ -164,9 +165,9 @@ class TestCommissionFlow:
         assert matching[0]["amount"] == 40.0
         assert matching[0]["status"] == "owed"
 
-    def test_cancel_within_grace_no_charge(self, driver_token):
+    def test_cancel_within_grace_no_charge(self, driver_token, admin_token):
         h = {"Authorization": f"Bearer {driver_token}"}
-        r = requests.post(f"{API}/jobs", headers=h, json={
+        r = requests.post(f"{API}/jobs", headers={"Authorization": f"Bearer {admin_token}"}, json={
             "title": "TEST Grace Cancel", "pickup_address": "a", "delivery_address": "b",
             "pickup_city": "Toronto", "delivery_city": "Ottawa",
             "goods_type": "sample", "temperature_controlled": False,
@@ -184,9 +185,9 @@ class TestCommissionFlow:
         job = requests.get(f"{API}/jobs/available", headers=h, timeout=10).json()["jobs"]
         assert any(j["id"] == job_id and j["status"] == "open" and j["accepted_by"] is None for j in job)
 
-    def test_cancel_after_grace_charges_fee(self, driver_token, driver_id):
+    def test_cancel_after_grace_charges_fee(self, driver_token, driver_id, admin_token):
         h = {"Authorization": f"Bearer {driver_token}"}
-        r = requests.post(f"{API}/jobs", headers=h, json={
+        r = requests.post(f"{API}/jobs", headers={"Authorization": f"Bearer {admin_token}"}, json={
             "title": "TEST Late Cancel", "pickup_address": "a", "delivery_address": "b",
             "pickup_city": "Toronto", "delivery_city": "Ottawa",
             "goods_type": "sample", "temperature_controlled": False,
@@ -214,10 +215,10 @@ class TestCommissionFlow:
         assert data["ledger_entry"]["type"] == "cancellation_fee"
         assert data["ledger_entry"]["status"] == "owed"
 
-    def test_cancel_403_if_not_assigned(self, driver_token, second_driver_token):
-        # driver 1 creates & accepts
+    def test_cancel_403_if_not_assigned(self, driver_token, second_driver_token, admin_token):
+        # admin creates, driver 1 accepts
         h1 = {"Authorization": f"Bearer {driver_token}"}
-        r = requests.post(f"{API}/jobs", headers=h1, json={
+        r = requests.post(f"{API}/jobs", headers={"Authorization": f"Bearer {admin_token}"}, json={
             "title": "TEST RBAC cancel", "pickup_address": "a", "delivery_address": "b",
             "pickup_city": "Toronto", "delivery_city": "Ottawa",
             "goods_type": "sample", "temperature_controlled": False,
@@ -232,9 +233,9 @@ class TestCommissionFlow:
         # cleanup: driver1 cancels (within grace)
         requests.post(f"{API}/jobs/{job_id}/cancel", headers=h1, timeout=10)
 
-    def test_cancel_400_if_not_in_progress(self, driver_token):
+    def test_cancel_400_if_not_in_progress(self, driver_token, admin_token):
         h = {"Authorization": f"Bearer {driver_token}"}
-        r = requests.post(f"{API}/jobs", headers=h, json={
+        r = requests.post(f"{API}/jobs", headers={"Authorization": f"Bearer {admin_token}"}, json={
             "title": "TEST open cancel", "pickup_address": "a", "delivery_address": "b",
             "pickup_city": "Toronto", "delivery_city": "Ottawa",
             "goods_type": "sample", "temperature_controlled": False,

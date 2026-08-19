@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request
+from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadFile, File, Form, Query, Response
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -15,6 +15,7 @@ import stripe
 import resend
 import asyncio
 import hashlib
+import requests
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
 
 ROOT_DIR = Path(__file__).parent
@@ -151,6 +152,7 @@ class UserResponse(BaseModel):
     phone: str
     role: str
     created_at: str
+    verification_status: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -480,6 +482,108 @@ def strip_facility_billing(fac: dict, user: dict) -> dict:
         return fac
     return {k: v for k, v in fac.items() if k != "billing_email"}
 
+async def driver_verification_of(user: dict) -> Optional[str]:
+    if user.get("role") != "driver":
+        return None
+    rec = await db.drivers.find_one({"user_id": user["id"]}, {"_id": 0, "verification_status": 1})
+    return rec.get("verification_status", "incomplete") if rec else "incomplete"
+
+# ---- Emergent Object Storage (driver documents) ----
+STORAGE_BASE = (os.environ.get("INTEGRATION_PROXY_URL") or "").strip() or "https://integrations.emergentagent.com"
+STORAGE_URL = STORAGE_BASE.rstrip("/") + "/objstore/api/v1/storage"
+EMERGENT_KEY = os.environ.get("EMERGENT_LLM_KEY")
+STORAGE_APP_PREFIX = "meditrans"
+storage_key = None
+
+def init_storage(force: bool = False):
+    global storage_key
+    if storage_key and not force:
+        return storage_key
+    resp = requests.post(f"{STORAGE_URL}/init", json={"emergent_key": EMERGENT_KEY}, timeout=30)
+    resp.raise_for_status()
+    storage_key = resp.json()["storage_key"]
+    return storage_key
+
+def put_object(path: str, data: bytes, content_type: str) -> dict:
+    key = init_storage()
+    resp = requests.put(
+        f"{STORAGE_URL}/objects/{path}",
+        headers={"X-Storage-Key": key, "Content-Type": content_type},
+        data=data, timeout=120
+    )
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.put(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key, "Content-Type": content_type}, data=data, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+def get_object(path: str):
+    key = init_storage()
+    resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    if resp.status_code == 404:
+        key = init_storage(force=True)
+        resp = requests.get(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=60)
+    resp.raise_for_status()
+    return resp.content, resp.headers.get("Content-Type", "application/octet-stream")
+
+def del_object(path: str):
+    key = init_storage()
+    requests.delete(f"{STORAGE_URL}/objects/{path}", headers={"X-Storage-Key": key}, timeout=30)
+
+async def cascade_delete_driver_data(user_id: str):
+    docs = await db.driver_documents.find({"user_id": user_id}, {"_id": 0, "storage_path": 1}).to_list(50)
+    for d in docs:
+        try:
+            await asyncio.to_thread(del_object, d["storage_path"])
+        except Exception as e:
+            logging.getLogger(__name__).warning(f"Storage blob delete failed: {e}")
+    await db.driver_documents.delete_many({"user_id": user_id})
+    await db.drivers.delete_one({"user_id": user_id})
+
+# ---- Driver onboarding document registry ----
+DRIVER_DOC_TYPES = {
+    "drivers_licence": {"label": "Driver's Licence", "required": True},
+    "vehicle_registration": {"label": "Vehicle Registration + Plate", "required": True},
+    "cvor": {"label": "CVOR Status", "required": True},
+    "tdg_certificate": {"label": "TDG Training Certificate", "required": True},
+    "vulnerable_sector_check": {"label": "Vulnerable Sector Check", "required": True},
+    "commercial_insurance": {"label": "Commercial Insurance (min $2M liability)", "required": True, "needs_expiry": True},
+    "cold_chain_cert": {"label": "Cold-Chain Handling Certification", "required": False, "unlocks": "cold_chain jobs"},
+}
+DOC_STATUSES = {"missing", "pending", "approved", "rejected"}
+DOC_TO_DRIVER_FIELD = {
+    "cvor": "cvor_status",
+    "tdg_certificate": "tdg_cert_status",
+    "vulnerable_sector_check": "vulnerable_sector_check_status",
+    "commercial_insurance": "insurance_status",
+}
+ALLOWED_UPLOAD_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf", "image/heic"}
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+async def ensure_driver_record(user_id: str) -> dict:
+    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
+    if rec:
+        return rec
+    rec = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "vehicle_type": None,
+        "vehicle_plate": None,
+        "cvor_status": "not_submitted",
+        "tdg_cert_status": "not_submitted",
+        "vulnerable_sector_check_status": "not_submitted",
+        "insurance_status": "not_submitted",
+        "insurance_expiry": None,
+        "cold_chain_certified": False,
+        "verification_status": "incomplete",
+        "rating_avg": 0.0,
+        "total_trips": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.drivers.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
 # Auth Routes
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
@@ -514,7 +618,8 @@ async def register(user_data: UserCreate):
             full_name=user_data.full_name,
             phone=user_data.phone,
             role=role,
-            created_at=user_doc["created_at"]
+            created_at=user_doc["created_at"],
+            verification_status="incomplete" if role == "driver" else None
         )
     )
 
@@ -538,7 +643,8 @@ async def login(credentials: UserLogin):
             full_name=user["full_name"],
             phone=user["phone"],
             role=user["role"],
-            created_at=user["created_at"]
+            created_at=user["created_at"],
+            verification_status=await driver_verification_of(user)
         )
     )
 
@@ -550,7 +656,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         full_name=current_user["full_name"],
         phone=current_user["phone"],
         role=current_user["role"],
-        created_at=current_user["created_at"]
+        created_at=current_user["created_at"],
+        verification_status=await driver_verification_of(current_user)
     )
 
 @api_router.post("/auth/change-password")
@@ -1573,6 +1680,7 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
     result = await db.users.delete_one({"id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
+    await cascade_delete_driver_data(user_id)
     return {"status": "deleted", "user_id": user_id}
 
 @api_router.get("/admin/jobs")
@@ -1750,7 +1858,7 @@ async def admin_delete_user_v2(user_id: str, admin: dict = Depends(require_admin
     result = await db.users.delete_one({"id": user_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
-    await db.drivers.delete_one({"user_id": user_id})
+    await cascade_delete_driver_data(user_id)
     return {"status": "deleted", "user_id": user_id}
 
 # ---- Marketplace CRUD: Drivers (extends a user) ----
@@ -2052,6 +2160,230 @@ async def get_audit_logs(
     logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(min(limit, 1000))
     return {"logs": logs, "count": len(logs)}
 
+# ---- Driver Onboarding (documents + verification) ----
+def build_checklist(docs_by_type: dict, rec: dict):
+    checklist = []
+    for dt, meta in DRIVER_DOC_TYPES.items():
+        doc = docs_by_type.get(dt)
+        checklist.append({
+            "doc_type": dt,
+            "label": meta["label"],
+            "required": meta["required"],
+            "needs_expiry": meta.get("needs_expiry", False),
+            "unlocks": meta.get("unlocks"),
+            "status": doc["status"] if doc else "missing",
+            "doc_id": doc["id"] if doc else None,
+            "original_filename": doc.get("original_filename") if doc else None,
+            "uploaded_at": doc.get("uploaded_at") if doc else None,
+            "insurance_expiry": doc.get("insurance_expiry") if doc else None,
+            "review_notes": doc.get("review_notes") if doc else None,
+        })
+    required_submitted = all(
+        docs_by_type.get(dt) and docs_by_type[dt]["status"] != "rejected"
+        for dt, meta in DRIVER_DOC_TYPES.items() if meta["required"]
+    )
+    return checklist, required_submitted
+
+@api_router.get("/driver/onboarding")
+async def get_driver_onboarding(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "driver":
+        raise HTTPException(status_code=403, detail="Driver access required")
+    rec = await ensure_driver_record(current_user["id"])
+    docs = await db.driver_documents.find({"user_id": current_user["id"], "is_deleted": False}, {"_id": 0}).to_list(50)
+    docs_by_type = {d["doc_type"]: d for d in docs}
+    checklist, required_submitted = build_checklist(docs_by_type, rec)
+    return {
+        "verification_status": rec.get("verification_status", "incomplete"),
+        "checklist": checklist,
+        "all_required_submitted": required_submitted,
+        "cold_chain_certified": rec.get("cold_chain_certified", False)
+    }
+
+@api_router.post("/driver/documents/{doc_type}", status_code=201)
+async def upload_driver_document(
+    doc_type: str,
+    file: UploadFile = File(...),
+    insurance_expiry: Optional[str] = Form(None),
+    vehicle_plate: Optional[str] = Form(None),
+    current_user: dict = Depends(get_current_user)
+):
+    if current_user.get("role") != "driver":
+        raise HTTPException(status_code=403, detail="Driver access required")
+    if doc_type not in DRIVER_DOC_TYPES:
+        raise HTTPException(status_code=422, detail=f"Invalid doc_type. Allowed: {sorted(DRIVER_DOC_TYPES)}")
+    if doc_type == "commercial_insurance" and not insurance_expiry:
+        raise HTTPException(status_code=422, detail="insurance_expiry is required for commercial insurance")
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(status_code=422, detail="Only JPG, PNG, WEBP, HEIC or PDF files are accepted")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty file")
+
+    rec = await ensure_driver_record(current_user["id"])
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
+    path = f"{STORAGE_APP_PREFIX}/driver-docs/{current_user['id']}/{doc_type}/{uuid.uuid4()}.{ext}"
+    try:
+        result = await asyncio.to_thread(put_object, path, data, content_type)
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Document upload to storage failed: {e}")
+        raise HTTPException(status_code=502, detail="Document storage is temporarily unavailable. Please try again.")
+
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.driver_documents.find_one({"user_id": current_user["id"], "doc_type": doc_type, "is_deleted": False}, {"_id": 0})
+    doc_fields = {
+        "storage_path": result["path"],
+        "original_filename": file.filename,
+        "content_type": content_type,
+        "size": len(data),
+        "insurance_expiry": insurance_expiry,
+        "status": "pending",
+        "uploaded_at": now,
+        "reviewed_at": None,
+        "reviewed_by": None,
+        "review_notes": None,
+    }
+    if existing:
+        doc_id = existing["id"]
+        await db.driver_documents.update_one({"id": doc_id}, {"$set": doc_fields})
+    else:
+        doc_id = str(uuid.uuid4())
+        await db.driver_documents.insert_one({"id": doc_id, "user_id": current_user["id"], "doc_type": doc_type, "is_deleted": False, **doc_fields})
+
+    driver_updates = {}
+    if doc_type in DOC_TO_DRIVER_FIELD:
+        driver_updates[DOC_TO_DRIVER_FIELD[doc_type]] = "pending"
+    if insurance_expiry and doc_type == "commercial_insurance":
+        driver_updates["insurance_expiry"] = insurance_expiry
+    if vehicle_plate and doc_type == "vehicle_registration":
+        driver_updates["vehicle_plate"] = vehicle_plate
+    if driver_updates:
+        await db.drivers.update_one({"user_id": current_user["id"]}, {"$set": driver_updates})
+
+    docs = await db.driver_documents.find({"user_id": current_user["id"], "is_deleted": False}, {"_id": 0}).to_list(50)
+    _, required_submitted = build_checklist({d["doc_type"]: d for d in docs}, rec)
+    if required_submitted and rec.get("verification_status") in ("incomplete", "rejected"):
+        await db.drivers.update_one({"user_id": current_user["id"]}, {"$set": {"verification_status": "pending_review"}})
+
+    await log_audit(current_user, "upload", "driver_document", doc_id)
+    return {
+        "doc_id": doc_id,
+        "doc_type": doc_type,
+        "status": "pending",
+        "all_required_submitted": required_submitted
+    }
+
+@api_router.get("/driver-documents/{doc_id}/file")
+async def serve_driver_document(doc_id: str, request: Request, auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    doc = await db.driver_documents.find_one({"id": doc_id, "is_deleted": False}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if doc["user_id"] != current_user["id"] and current_user.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        data, ct = await asyncio.to_thread(get_object, doc["storage_path"])
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Document fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Document storage is temporarily unavailable")
+    await log_audit(current_user, "view", "driver_document", doc_id)
+    return Response(content=data, media_type=doc.get("content_type") or ct)
+
+# ---- Staff review of driver verifications ----
+class DocumentReview(BaseModel):
+    status: str
+    review_notes: Optional[str] = None
+
+class VerificationUpdate(BaseModel):
+    verification_status: str
+
+@api_router.get("/admin/driver-verifications")
+async def list_driver_verifications(staff: dict = Depends(require_staff)):
+    records = await db.drivers.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    user_ids = [r["user_id"] for r in records]
+    users = await db.users.find({"id": {"$in": user_ids}}, {"_id": 0, "password_hash": 0}).to_list(500)
+    users_by_id = {u["id"]: u for u in users}
+    docs = await db.driver_documents.find({"user_id": {"$in": user_ids}, "is_deleted": False}, {"_id": 0}).to_list(2000)
+    docs_by_user = {}
+    for d in docs:
+        docs_by_user.setdefault(d["user_id"], {})[d["doc_type"]] = d
+    out = []
+    for rec in records:
+        u = users_by_id.get(rec["user_id"])
+        if not u:
+            continue
+        checklist, required_submitted = build_checklist(docs_by_user.get(rec["user_id"], {}), rec)
+        out.append({
+            "user_id": rec["user_id"],
+            "full_name": u.get("full_name"),
+            "email": u.get("email"),
+            "phone": u.get("phone"),
+            "verification_status": rec.get("verification_status", "incomplete"),
+            "cold_chain_certified": rec.get("cold_chain_certified", False),
+            "vehicle_plate": rec.get("vehicle_plate"),
+            "insurance_expiry": rec.get("insurance_expiry"),
+            "all_required_submitted": required_submitted,
+            "checklist": checklist
+        })
+    return {"drivers": out}
+
+@api_router.put("/admin/driver-documents/{doc_id}")
+async def review_driver_document(doc_id: str, payload: DocumentReview, staff: dict = Depends(require_staff)):
+    if payload.status not in ("approved", "rejected"):
+        raise HTTPException(status_code=422, detail="status must be 'approved' or 'rejected'")
+    doc = await db.driver_documents.find_one({"id": doc_id, "is_deleted": False}, {"_id": 0})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    await db.driver_documents.update_one({"id": doc_id}, {"$set": {
+        "status": payload.status,
+        "review_notes": payload.review_notes,
+        "reviewed_at": datetime.now(timezone.utc).isoformat(),
+        "reviewed_by": staff["id"]
+    }})
+    driver_updates = {}
+    if doc["doc_type"] in DOC_TO_DRIVER_FIELD:
+        driver_updates[DOC_TO_DRIVER_FIELD[doc["doc_type"]]] = "valid" if payload.status == "approved" else "rejected"
+    if doc["doc_type"] == "cold_chain_cert":
+        driver_updates["cold_chain_certified"] = payload.status == "approved"
+    if driver_updates:
+        await db.drivers.update_one({"user_id": doc["user_id"]}, {"$set": driver_updates})
+    await log_audit(staff, "review", "driver_document", doc_id)
+    updated = await db.driver_documents.find_one({"id": doc_id}, {"_id": 0})
+    return updated
+
+@api_router.put("/admin/driver-verifications/{user_id}")
+async def update_driver_verification(user_id: str, payload: VerificationUpdate, staff: dict = Depends(require_staff)):
+    validate_enum(payload.verification_status, DRIVER_VERIFICATION_STATUSES, "verification_status")
+    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
+    if not rec:
+        raise HTTPException(status_code=404, detail="Driver record not found")
+    if payload.verification_status == "approved":
+        docs = await db.driver_documents.find({"user_id": user_id, "is_deleted": False}, {"_id": 0}).to_list(50)
+        docs_by_type = {d["doc_type"]: d for d in docs}
+        blockers = [
+            meta["label"] for dt, meta in DRIVER_DOC_TYPES.items()
+            if meta["required"] and (dt not in docs_by_type or docs_by_type[dt]["status"] == "rejected")
+        ]
+        if blockers:
+            raise HTTPException(status_code=400, detail=f"Cannot approve driver — missing or rejected required documents: {', '.join(blockers)}")
+    result = await db.drivers.update_one({"user_id": user_id}, {"$set": {"verification_status": payload.verification_status}})
+    await log_audit(staff, "update", "driver_verification", user_id)
+    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
+    return rec
+
 # Health check
 @api_router.get("/")
 async def root():
@@ -2111,6 +2443,14 @@ async def startup_event():
     # Custody chain indexes
     await db.custody_events.create_index("job_id")
     await db.custody_events.create_index("timestamp")
+    # Driver documents index
+    await db.driver_documents.create_index([("user_id", 1), ("doc_type", 1)])
+    # Init object storage for driver documents
+    try:
+        await asyncio.to_thread(init_storage)
+        logger.info("Object storage initialized")
+    except Exception as e:
+        logger.error(f"Object storage init failed: {e}")
     # Auto-promote admin if ADMIN_EMAIL user already exists
     if ADMIN_EMAIL:
         await db.users.update_one(

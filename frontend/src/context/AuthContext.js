@@ -89,7 +89,8 @@ export const roleHome = (user) => {
     case 'admin': return '/admin';
     case 'facility': return '/facility';
     case 'dispatcher': return '/dispatch';
-    default: return '/dashboard';
+    default:
+      return user?.verification_status === 'approved' ? '/dashboard' : '/onboarding';
   }
 };
 

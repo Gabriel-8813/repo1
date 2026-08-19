@@ -19,6 +19,7 @@ import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FacilityHomePage from "./pages/FacilityHomePage";
 import DispatchHomePage from "./pages/DispatchHomePage";
+import OnboardingPage from "./pages/OnboardingPage";
 
 // Protected Route Component (kept for generic authed pages)
 // eslint-disable-next-line no-unused-vars
@@ -77,6 +78,27 @@ const RoleRoute = ({ children, roles }) => {
   return children;
 };
 
+// Verified Driver Route - drivers must be verification-approved; admins pass through
+const VerifiedDriverRoute = ({ children }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (user?.role === 'driver' && user?.verification_status !== 'approved') {
+    return <Navigate to="/onboarding" replace />;
+  }
+  if (!['driver', 'admin'].includes(user?.role)) return <Navigate to={roleHome(user)} replace />;
+
+  return children;
+};
+
 // Admin Route - requires admin role
 const AdminRoute = ({ children }) => {
   const { isAuthenticated, loading, user } = useAuth();
@@ -123,19 +145,27 @@ function AppRoutes() {
       
       {/* Protected Routes */}
       <Route 
+        path="/onboarding" 
+        element={
+          <RoleRoute roles={['driver']}>
+            <OnboardingPage />
+          </RoleRoute>
+        } 
+      />
+      <Route 
         path="/dashboard" 
         element={
-          <RoleRoute roles={['driver', 'admin']}>
+          <VerifiedDriverRoute>
             <DashboardPage />
-          </RoleRoute>
+          </VerifiedDriverRoute>
         } 
       />
       <Route 
         path="/jobs" 
         element={
-          <RoleRoute roles={['driver', 'admin']}>
+          <VerifiedDriverRoute>
             <JobsPage />
-          </RoleRoute>
+          </VerifiedDriverRoute>
         } 
       />
       <Route 
