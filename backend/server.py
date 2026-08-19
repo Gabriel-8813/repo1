@@ -15,6 +15,7 @@ import stripe
 import resend
 import asyncio
 import hashlib
+import json
 import re
 import requests
 from emergentintegrations.payments.stripe.checkout import StripeCheckout, CheckoutSessionResponse, CheckoutStatusResponse, CheckoutSessionRequest
@@ -124,12 +125,49 @@ app = FastAPI(title="MediTrans Ontario API")
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# ---- Field-level encryption for personal / health-adjacent data (at rest) ----
+from cryptography.fernet import Fernet
+_fernet = Fernet(os.environ["DATA_ENCRYPTION_KEY"].encode())
+ENC_PREFIX = "enc::"
+PRIVACY_POLICY_VERSION = "1.0"
+
+def enc_pii(value: Optional[str]) -> Optional[str]:
+    if not value or not isinstance(value, str) or value.startswith(ENC_PREFIX) or value == "[REDACTED]":
+        return value
+    return ENC_PREFIX + _fernet.encrypt(value.encode()).decode()
+
+def dec_pii(value):
+    if isinstance(value, str) and value.startswith(ENC_PREFIX):
+        try:
+            return _fernet.decrypt(value[len(ENC_PREFIX):].encode()).decode()
+        except Exception:
+            return "[DECRYPTION ERROR]"
+    return value
+
+JOB_PII_FIELDS = ("recipient_name", "recipient_phone")
+EVENT_PII_FIELDS = ("recipient_name", "recipient_relationship")
+
+def dec_job(doc: Optional[dict]) -> Optional[dict]:
+    if doc:
+        for f in JOB_PII_FIELDS:
+            if f in doc:
+                doc[f] = dec_pii(doc[f])
+    return doc
+
+def dec_event(doc: Optional[dict]) -> Optional[dict]:
+    if doc:
+        for f in EVENT_PII_FIELDS:
+            if f in doc:
+                doc[f] = dec_pii(doc[f])
+    return doc
+
 # Pydantic Models
 class UserCreate(BaseModel):
     email: EmailStr
     password: str
     full_name: str
     phone: str
+    privacy_policy_accepted: bool = False
 
 class UserLogin(BaseModel):
     email: EmailStr
@@ -154,6 +192,7 @@ class UserResponse(BaseModel):
     role: str
     created_at: str
     verification_status: Optional[str] = None
+    privacy_policy: Optional[dict] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -459,6 +498,7 @@ DRIVER_JOB_FIELDS = {
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
 
 def scoped_job(job: dict, user: dict) -> dict:
+    job = dec_job(dict(job))
     if user.get("role") != "driver":
         return job
     j = {k: v for k, v in job.items() if k in DRIVER_JOB_FIELDS}
@@ -481,6 +521,16 @@ def address_area(address: Optional[str], city: Optional[str] = None) -> str:
     locality = city or (parts[1] if len(parts) > 1 else "")
     return f"{street}, {locality}" if locality and locality.lower() != street.lower() else street
 
+_audit_lock = asyncio.Lock()
+
+def _audit_hash(entry: dict) -> str:
+    material = json.dumps({
+        "seq": entry["seq"], "actor_id": entry["actor_id"], "actor_role": entry.get("actor_role"),
+        "action": entry["action"], "entity": entry["entity"], "entity_id": entry["entity_id"],
+        "timestamp": entry["timestamp"], "details": entry.get("details"), "prev_hash": entry["prev_hash"]
+    }, sort_keys=True, default=str)
+    return hashlib.sha256(material.encode()).hexdigest()
+
 async def log_audit(actor: dict, action: str, entity: str, entity_id: str, details: Optional[dict] = None):
     try:
         entry = {
@@ -494,7 +544,16 @@ async def log_audit(actor: dict, action: str, entity: str, entity_id: str, detai
         }
         if details:
             entry["details"] = details
-        await db.audit_logs.insert_one(entry)
+        async with _audit_lock:
+            prev = await db.audit_logs.find_one({"seq": {"$exists": True}}, {"_id": 0, "seq": 1, "hash": 1}, sort=[("seq", -1)])
+            entry["seq"] = (prev["seq"] + 1) if prev else 1
+            entry["prev_hash"] = prev["hash"] if prev else "genesis"
+            entry["hash"] = _audit_hash(entry)
+            await db.audit_logs.insert_one(entry)
+            await db.settings.update_one(
+                {"key": "audit_chain_head"},
+                {"$set": {"key": "audit_chain_head", "value": {"seq": entry["seq"], "hash": entry["hash"]}}},
+                upsert=True)
     except Exception as e:
         logging.getLogger(__name__).error(f"Audit log write failed: {e}")
 
@@ -572,7 +631,8 @@ async def send_recipient_sms(job: dict, kind: str, link: Optional[str] = None):
     try:
         if not job.get("recipient_sms_consent") or not job.get("recipient_phone"):
             return None
-        if job.get("recipient_phone") == REDACTED:
+        recipient_phone = dec_pii(job.get("recipient_phone"))
+        if recipient_phone == REDACTED:
             return None
         if (job.get("sms_flags") or {}).get(kind):
             return None
@@ -582,7 +642,7 @@ async def send_recipient_sms(job: dict, kind: str, link: Optional[str] = None):
             if fac:
                 facility_name = fac["name"]
         body = SMS_KINDS[kind].format(facility=facility_name, link=link or "")
-        rec = await send_sms(job["recipient_phone"], body, job_id=job["id"], kind=kind)
+        rec = await send_sms(recipient_phone, body, job_id=job["id"], kind=kind)
         await db.jobs.update_one({"id": job["id"]}, {"$set": {f"sms_flags.{kind}": True}})
         return rec
     except Exception as e:
@@ -796,6 +856,8 @@ async def ensure_driver_record(user_id: str) -> dict:
 # Auth Routes
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
+    if not user_data.privacy_policy_accepted:
+        raise HTTPException(status_code=422, detail="You must accept the privacy policy to create an account")
     existing = await db.users.find_one({"email": user_data.email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
@@ -812,6 +874,7 @@ async def register(user_data: UserCreate):
         "role": role,
         "status": "approved",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "privacy_policy": {"version": PRIVACY_POLICY_VERSION, "accepted_at": datetime.now(timezone.utc).isoformat()},
         "driver_profile": None
     }
     
@@ -828,7 +891,8 @@ async def register(user_data: UserCreate):
             phone=user_data.phone,
             role=role,
             created_at=user_doc["created_at"],
-            verification_status="incomplete" if role == "driver" else None
+            verification_status="incomplete" if role == "driver" else None,
+            privacy_policy=user_doc["privacy_policy"]
         )
     )
 
@@ -853,9 +917,17 @@ async def login(credentials: UserLogin):
             phone=user["phone"],
             role=user["role"],
             created_at=user["created_at"],
-            verification_status=await driver_verification_of(user)
+            verification_status=await driver_verification_of(user),
+            privacy_policy=user.get("privacy_policy")
         )
     )
+
+@api_router.post("/auth/accept-privacy")
+async def accept_privacy_policy(current_user: dict = Depends(get_current_user)):
+    record = {"version": PRIVACY_POLICY_VERSION, "accepted_at": datetime.now(timezone.utc).isoformat()}
+    await db.users.update_one({"id": current_user["id"]}, {"$set": {"privacy_policy": record}})
+    await log_audit(current_user, "accept", "privacy_policy", PRIVACY_POLICY_VERSION)
+    return {"privacy_policy": record}
 
 @api_router.get("/auth/me", response_model=UserResponse)
 async def get_me(current_user: dict = Depends(get_current_user)):
@@ -866,7 +938,8 @@ async def get_me(current_user: dict = Depends(get_current_user)):
         phone=current_user["phone"],
         role=current_user["role"],
         created_at=current_user["created_at"],
-        verification_status=await driver_verification_of(current_user)
+        verification_status=await driver_verification_of(current_user),
+        privacy_policy=current_user.get("privacy_policy")
     )
 
 @api_router.post("/auth/change-password")
@@ -2039,7 +2112,7 @@ async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
 @api_router.get("/admin/jobs")
 async def admin_list_jobs(admin: dict = Depends(require_admin)):
     jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(1000)
-    return {"jobs": jobs}
+    return {"jobs": [dec_job(j) for j in jobs]}
 
 @api_router.put("/admin/jobs/{job_id}")
 async def admin_update_job(job_id: str, update: JobAdminUpdate, admin: dict = Depends(require_admin)):
@@ -2411,6 +2484,9 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
         updates["offered_price"] = updates["payout_amount"]
     if "distance_km" in updates:
         updates["estimated_distance_km"] = updates["distance_km"]
+    for f in ("recipient_name", "recipient_phone"):
+        if updates.get(f):
+            updates[f] = enc_pii(updates[f])
     if "assigned_driver_id" in updates:
         effective_status = new_status or job.get("status")
         post_accept = effective_status in ("accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed")
@@ -2544,6 +2620,9 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         "actor_id": current_user["id"],
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+    for f in EVENT_PII_FIELDS:
+        if doc.get(f):
+            doc[f] = enc_pii(doc[f])
     await db.custody_events.insert_one(doc)
     await log_audit(current_user, "create", "custody_event", doc["id"])
     doc.pop("_id", None)
@@ -2580,7 +2659,7 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         await notify_dispatchers("job_exception", "Delivery exception",
                                  f"'{job.get('title') or 'A delivery'}': {et.replace('_', ' ')} — {payload.notes or 'no notes'}.", job_id)
 
-    return {**doc, "job_status": new_status, "settlement": settlement}
+    return {**dec_event(dict(doc)), "job_status": new_status, "settlement": settlement}
 
 # ---- Delivery evidence (signature / ID capture) ----
 EVIDENCE_KINDS = {"signature", "id_photo"}
@@ -2698,6 +2777,7 @@ async def list_custody_events(job_id: str, current_user: dict = Depends(get_curr
     await assert_job_access(job, current_user)
     await log_view_once(current_user, "job_custody", job_id)
     events = await db.custody_events.find({"job_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
+    events = [dec_event(e) for e in events]
     return {"custody_events": events, "count": len(events)}
 
 @api_router.get("/custody-events/{event_id}")
@@ -2710,7 +2790,7 @@ async def get_custody_event(event_id: str, current_user: dict = Depends(get_curr
         await assert_job_access(job, current_user)
     elif current_user.get("role") not in STAFF_ROLES:
         raise HTTPException(status_code=403, detail="Not authorized")
-    return event
+    return dec_event(event)
 
 @api_router.put("/custody-events/{event_id}")
 @api_router.patch("/custody-events/{event_id}")
@@ -3020,6 +3100,7 @@ class FacilityRequestCreate(BaseModel):
     special_instructions: Optional[str] = None  # non-clinical handling notes only
     requested_pickup_time: str
     recipient_sms_consent: bool = False
+    consent_data_handling: bool = False
     facility_id: Optional[str] = None
 
 CATEGORY_TITLES = {
@@ -3084,6 +3165,8 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
             raise HTTPException(status_code=400, detail="Set up your facility profile before booking transport")
     if facility.get("status") == "suspended":
         raise HTTPException(status_code=403, detail="This facility is suspended and cannot book new transports. Contact the administrator.")
+    if not payload.consent_data_handling:
+        raise HTTPException(status_code=422, detail="Recipient consent to the delivery and to personal-data handling is required before booking")
 
     pickup = payload.pickup_address or facility.get("address")
     distance = await estimate_distance_km(pickup, payload.dropoff_address)
@@ -3122,9 +3205,16 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
         "handling_flags": payload.handling_flags,
         "special_instructions": payload.special_instructions,
         "item_count": payload.item_count,
-        "recipient_name": payload.recipient_name,
-        "recipient_phone": payload.recipient_phone,
+        "recipient_name": enc_pii(payload.recipient_name),
+        "recipient_phone": enc_pii(payload.recipient_phone),
         "recipient_sms_consent": bool(payload.recipient_sms_consent),
+        "consent": {
+            "delivery_and_data_handling": True,
+            "sms_updates": bool(payload.recipient_sms_consent),
+            "captured_by": current_user["id"],
+            "captured_at": now,
+            "policy_version": PRIVACY_POLICY_VERSION
+        },
         "requested_pickup_time": payload.requested_pickup_time,
         "distance_estimated": distance is not None,
         "status": "open",
@@ -3141,7 +3231,7 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
     await log_audit(current_user, "create", "job", job_id)
     await log_audit(current_user, "update", "job", job_id)  # created -> offered
     job_doc.pop("_id", None)
-    return job_doc
+    return dec_job(job_doc)
 
 @api_router.get("/facility/deliveries")
 async def facility_deliveries(current_user: dict = Depends(get_current_user)):
@@ -3162,8 +3252,9 @@ async def facility_deliveries(current_user: dict = Depends(get_current_user)):
         ratings[did] = await _compute_driver_rating(did)
     out = []
     for j in jobs:
+        j = dec_job(j)
         did = j.get("assigned_driver_id") or j.get("accepted_by")
-        last_ev = await db.custody_events.find_one({"job_id": j["id"]}, {"_id": 0}, sort=[("timestamp", -1)])
+        last_ev = dec_event(await db.custody_events.find_one({"job_id": j["id"]}, {"_id": 0}, sort=[("timestamp", -1)]))
         out.append({
             **j,
             "driver": ({"name": names.get(did) or "Driver (deactivated)", "rating_avg": ratings.get(did, {}).get("avg", 0), "rating_count": ratings.get(did, {}).get("count", 0)} if did else None),
@@ -3198,7 +3289,7 @@ async def _facility_statement(user: dict, month: str):
             "job_id": j["id"],
             "date": done_at,
             "title": j.get("title") or "Medical transport",
-            "recipient_name": j.get("recipient_name"),
+            "recipient_name": dec_pii(j.get("recipient_name")),
             "dropoff_address": j.get("delivery_address"),
             "amount": round(float(j.get("payout_amount") or j.get("offered_price") or 0), 2)
         })
@@ -3677,7 +3768,9 @@ async def custody_record_pdf(job_id: str, request: Request, auth: Optional[str] 
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
+    job = dec_job(job)
     events = await db.custody_events.find({"job_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
+    events = [dec_event(e) for e in events]
     audits = await db.audit_logs.find({"entity_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
     uids = list({e.get("actor_id") for e in events if e.get("actor_id")} | {a["actor_id"] for a in audits})
     users = {u["id"]: u async for u in db.users.find({"id": {"$in": uids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
@@ -3788,6 +3881,7 @@ async def compliance_breach_report(date_from: str, date_to: str, format: Optiona
     users = {u["id"]: u async for u in db.users.find({"id": {"$in": duids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
     records = []
     for j in jobs:
+        j = dec_job(j)
         did = j.get("accepted_by") or j.get("assigned_driver_id")
         has_pii = bool((j.get("recipient_name") and j.get("recipient_name") != REDACTED) or
                        (j.get("recipient_phone") and j.get("recipient_phone") != REDACTED))
@@ -3959,6 +4053,55 @@ async def admin_manage_optout(payload: OptoutPayload, admin: dict = Depends(requ
     await log_audit(admin, "update", "sms_optout", norm, details={"action": payload.action})
     return {"phone": norm, "action": payload.action}
 
+@api_router.get("/admin/compliance/residency")
+async def compliance_residency(staff: dict = Depends(require_staff)):
+    region = os.environ.get("DATA_REGION", "not configured")
+    return {
+        "configured_region": region,
+        "components": [
+            {"name": "MongoDB (jobs, users, custody, audit)", "region": region,
+             "notes": "Primary datastore. Provision in a Canadian region (e.g. ca-central) at deployment."},
+            {"name": "Object storage (driver documents, delivery evidence)", "region": region,
+             "notes": "Ensure the storage bucket is created in a Canadian region at deployment."},
+            {"name": "Backend compute (FastAPI)", "region": region,
+             "notes": "Processes data in memory only; deploy in the same Canadian region."}
+        ],
+        "encryption": {
+            "at_rest": "Field-level AES-128 (Fernet) on recipient name/phone and custody recipient fields",
+            "in_transit": "TLS/HTTPS end-to-end (platform-terminated)"
+        },
+        "attestation": "Region values reflect the DATA_REGION configuration. The hosting platform controls the physical region of the preview environment; verify Canadian residency at production deployment."
+    }
+
+@api_router.get("/admin/compliance/audit-integrity")
+async def audit_integrity(staff: dict = Depends(require_staff)):
+    entries = await db.audit_logs.find({"seq": {"$exists": True}}, {"_id": 0}).sort("seq", 1).to_list(100000)
+    expected_seq = 1
+    prev_hash = "genesis"
+    for e in entries:
+        if e["seq"] != expected_seq:
+            return {"intact": False, "entries_checked": expected_seq - 1, "total_entries": len(entries),
+                    "problem": f"Missing or reordered entry: expected seq {expected_seq}, found {e['seq']} — an entry was deleted"}
+        if e.get("prev_hash") != prev_hash:
+            return {"intact": False, "entries_checked": expected_seq - 1, "total_entries": len(entries),
+                    "problem": f"Chain break at seq {e['seq']}: previous-hash mismatch"}
+        if _audit_hash(e) != e.get("hash"):
+            return {"intact": False, "entries_checked": expected_seq - 1, "total_entries": len(entries),
+                    "problem": f"Tampered entry at seq {e['seq']}: content hash mismatch — the entry was edited"}
+        prev_hash = e["hash"]
+        expected_seq += 1
+    head = await db.settings.find_one({"key": "audit_chain_head"}, {"_id": 0})
+    if head and entries:
+        last = entries[-1]
+        if head["value"]["seq"] > last["seq"]:
+            return {"intact": False, "entries_checked": len(entries), "total_entries": len(entries),
+                    "problem": f"Truncation detected: chain head records seq {head['value']['seq']} but the log ends at seq {last['seq']} — the newest entries were deleted"}
+        if head["value"]["seq"] == last["seq"] and head["value"]["hash"] != last["hash"]:
+            return {"intact": False, "entries_checked": len(entries), "total_entries": len(entries),
+                    "problem": f"Head mismatch at seq {last['seq']}: the newest entry was altered"}
+    return {"intact": True, "entries_checked": len(entries), "total_entries": len(entries),
+            "verified_at": datetime.now(timezone.utc).isoformat()}
+
 @api_router.get("/dispatch/board")
 async def dispatch_board(staff: dict = Depends(require_staff)):
     jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(300)
@@ -3967,6 +4110,7 @@ async def dispatch_board(staff: dict = Depends(require_staff)):
     driver_ids = list({j.get("assigned_driver_id") or j.get("accepted_by") for j in jobs if j.get("assigned_driver_id") or j.get("accepted_by")})
     names = {u["id"]: u["full_name"] async for u in db.users.find({"id": {"$in": driver_ids}}, {"_id": 0, "id": 1, "full_name": 1})}
     for j in jobs:
+        dec_job(j)
         j["facility_name"] = fac_names.get(j.get("facility_id"))
         did = j.get("assigned_driver_id") or j.get("accepted_by")
         j["driver_name"] = names.get(did) if did else None

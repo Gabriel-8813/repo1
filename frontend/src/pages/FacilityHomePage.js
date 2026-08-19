@@ -33,7 +33,7 @@ const STATUS_CLS = {
 };
 
 const emptyForm = {
-  pickup_address: '', recipient_name: '', dropoff_address: '', recipient_phone: '', recipient_sms_consent: false,
+  pickup_address: '', recipient_name: '', dropoff_address: '', recipient_phone: '', recipient_sms_consent: false, consent_data_handling: false,
   item_count: 1, item_category: 'prescription', handling_flags: [], special_instructions: '', requested_pickup_time: ''
 };
 
@@ -208,6 +208,12 @@ export default function FacilityHomePage() {
                         <Input required value={form.recipient_phone} onChange={(e) => setForm({ ...form, recipient_phone: e.target.value })} className="mt-1" data-testid="recipient-phone-input" />
                       </div>
                     </div>
+                    <label className="flex items-start gap-2 bg-emerald-50/60 border border-emerald-100 rounded-lg px-3 py-2 cursor-pointer">
+                      <input type="checkbox" required className="mt-0.5 accent-emerald-600" checked={form.consent_data_handling} onChange={(e) => setForm({ ...form, consent_data_handling: e.target.checked })} data-testid="data-consent-checkbox" />
+                      <span className="text-xs text-slate-600">
+                        <span className="font-semibold text-slate-800">Required:</span> The recipient has consented to this delivery and to MediTrans handling their personal data for delivery purposes (name, phone, address — encrypted at rest, auto-redacted after the retention period). <a href="/privacy" target="_blank" rel="noreferrer" className="text-blue-600 underline">Privacy policy</a>
+                      </span>
+                    </label>
                     <label className="flex items-start gap-2 bg-blue-50/60 border border-blue-100 rounded-lg px-3 py-2 cursor-pointer">
                       <input type="checkbox" className="mt-0.5 accent-blue-600" checked={form.recipient_sms_consent} onChange={(e) => setForm({ ...form, recipient_sms_consent: e.target.checked })} data-testid="sms-consent-checkbox" />
                       <span className="text-xs text-slate-600">

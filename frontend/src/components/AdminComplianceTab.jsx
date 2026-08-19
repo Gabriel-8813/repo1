@@ -39,6 +39,27 @@ export const AdminComplianceTab = () => {
   const [loading, setLoading] = useState(true);
   const [smsData, setSmsData] = useState(null);
   const [optoutPhone, setOptoutPhone] = useState('');
+  const [residency, setResidency] = useState(null);
+  const [integrity, setIntegrity] = useState(null);
+  const [verifying, setVerifying] = useState(false);
+
+  const loadResidency = useCallback(async () => {
+    try {
+      const r = await axios.get(`${API}/admin/compliance/residency`, { headers });
+      setResidency(r.data);
+    } catch { /* staff only */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const verifyIntegrity = async () => {
+    setVerifying(true);
+    try {
+      const r = await axios.get(`${API}/admin/compliance/audit-integrity`, { headers });
+      setIntegrity(r.data);
+      r.data.intact ? toast.success(`Audit chain intact — ${r.data.entries_checked} entries verified`) : toast.error('Audit chain compromised!');
+    } catch { toast.error('Verification failed'); }
+    finally { setVerifying(false); }
+  };
 
   const loadSms = useCallback(async () => {
     try {
@@ -85,7 +106,7 @@ export const AdminComplianceTab = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  useEffect(() => { loadAll(); loadLogs(filters); loadSms(); }, [loadAll, loadSms]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadAll(); loadLogs(filters); loadSms(); loadResidency(); }, [loadAll, loadSms, loadResidency]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveRetention = async () => {
     try {
@@ -156,6 +177,49 @@ export const AdminComplianceTab = () => {
         </Card>
       </div>
       )}
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+          <CardContent className="p-4 space-y-2">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-slate-900">Data residency & encryption</p>
+              <Badge className="bg-red-100 text-red-700 font-semibold" data-testid="residency-region-badge">🍁 {residency?.configured_region || '—'}</Badge>
+            </div>
+            <div className="space-y-1.5" data-testid="residency-components">
+              {(residency?.components || []).map((c) => (
+                <div key={c.name} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
+                  <span className="text-xs text-slate-700">{c.name}</span>
+                  <Badge className="bg-slate-100 text-slate-600 text-[10px]">{c.region}</Badge>
+                </div>
+              ))}
+            </div>
+            {residency && (
+              <div className="text-[11px] text-slate-500 space-y-0.5">
+                <p>At rest: {residency.encryption.at_rest}</p>
+                <p>In transit: {residency.encryption.in_transit}</p>
+                <p className="text-slate-400 italic">{residency.attestation}</p>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+          <CardContent className="p-4 space-y-3">
+            <p className="text-sm font-bold text-slate-900">Audit log integrity</p>
+            <p className="text-xs text-slate-500">The audit log is append-only with a SHA-256 hash chain — no role can edit or delete entries. Verification recomputes every hash and detects any tampering or deletion.</p>
+            <Button size="sm" className="rounded-full bg-blue-600 hover:bg-blue-700" onClick={verifyIntegrity} disabled={verifying} data-testid="verify-integrity-btn">
+              {verifying ? 'Verifying…' : 'Verify integrity now'}
+            </Button>
+            {integrity && (
+              <div className={`rounded-lg px-3 py-2 text-xs ${integrity.intact ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'}`} data-testid="integrity-result">
+                {integrity.intact
+                  ? `✓ Chain intact — ${integrity.entries_checked} entries verified at ${(integrity.verified_at || '').slice(11, 19)} UTC`
+                  : `✗ ${integrity.problem}`}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
         <CardContent className="p-4">

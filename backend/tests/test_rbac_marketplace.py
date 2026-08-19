@@ -44,7 +44,7 @@ def tokens():
 def fresh_driver():
     """Register a brand-new driver (no driver record => unverified)."""
     email = f"TEST_unverified_{uuid.uuid4().hex[:8]}@test.com"
-    r = requests.post(f"{API}/auth/register", json={
+    r = requests.post(f"{API}/auth/register", json={ "privacy_policy_accepted": True,
         "email": email, "password": "Test@1234", "full_name": "TEST Unverified",
         "phone": "+14165550000"
     }, timeout=15)

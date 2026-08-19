@@ -137,7 +137,7 @@ def deliver_facility_request(tokens, created_jobs, phone="416-555-0000"):
         "item_count": 1,
         "item_category": "lab_sample",
         "handling_flags": [],
-        "requested_pickup_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(),
+        "requested_pickup_time": (datetime.now(timezone.utc) + timedelta(hours=2)).isoformat(), "consent_data_handling": True,
         "facility_id": facility_id(tokens),
     }
     r = requests.post(f"{API}/facility/requests", headers=hdr(tokens["facility"]), json=payload, timeout=30)
@@ -440,8 +440,13 @@ class TestRetention:
                 assert e["recipient_name"] == "[REDACTED]", e
 
         fresh = db.jobs.find_one({"id": fresh_jid}, {"_id": 0})
-        assert fresh["recipient_name"] == "TEST_Recipient", fresh["recipient_name"]
-        assert fresh["recipient_phone"] == "416-555-0202"
+        # PII is now encrypted at rest: raw DB must hold ciphertext, API must return plaintext
+        assert fresh["recipient_name"].startswith("enc::"), fresh["recipient_name"]
+        assert fresh["recipient_phone"].startswith("enc::"), fresh["recipient_phone"]
+        via_api = requests.get(f"{API}/jobs/{fresh_jid}", headers=a, timeout=30).json()
+        via_api = via_api.get("job", via_api)
+        assert via_api["recipient_name"] == "TEST_Recipient", via_api["recipient_name"]
+        assert via_api["recipient_phone"] == "416-555-0202"
         assert not fresh.get("data_purged")
         ev = list(db.custody_events.find({"job_id": fresh_jid, "event_type": "delivered"}, {"_id": 0}))
         assert ev and ev[0].get("evidence_url"), "fresh job's evidence wrongly nulled"

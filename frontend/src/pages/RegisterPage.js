@@ -20,6 +20,7 @@ const RegisterPage = () => {
     full_name: '',
     phone: ''
   });
+  const [privacyAccepted, setPrivacyAccepted] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -38,6 +39,11 @@ const RegisterPage = () => {
 
     if (formData.password.length < 6) {
       setError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (!privacyAccepted) {
+      setError('You must accept the privacy policy to create an account');
       return;
     }
 
@@ -169,6 +175,13 @@ const RegisterPage = () => {
                   />
                 </div>
               </div>
+
+              <label className="flex items-start gap-2 cursor-pointer bg-slate-50 rounded-lg px-3 py-2.5">
+                <input type="checkbox" className="mt-0.5 accent-blue-600" checked={privacyAccepted} onChange={(e) => setPrivacyAccepted(e.target.checked)} data-testid="privacy-accept-checkbox" />
+                <span className="text-xs text-slate-600">
+                  I have read and accept the <a href="/privacy" target="_blank" className="text-blue-600 underline font-semibold">MediTrans Privacy Policy</a>, including how personal and health-adjacent information is collected, protected and retained.
+                </span>
+              </label>
 
               <div className="pt-2">
                 <Button

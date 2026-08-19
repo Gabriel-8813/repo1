@@ -228,7 +228,7 @@ class TestSuspendBlocksBooking:
         payload = {
             "pickup_address": PICKUP, "dropoff_address": DROPOFF,
             "item_category": "lab_sample", "handling_flags": [],
-            "item_count": 1, "recipient_name": "TEST Recipient", "recipient_phone": "4165550000", "requested_pickup_time": "2026-07-20T10:00:00Z",
+            "item_count": 1, "recipient_name": "TEST Recipient", "recipient_phone": "4165550000", "requested_pickup_time": "2026-07-20T10:00:00Z", "consent_data_handling": True,
         }
         r = requests.post(f"{API}/facility/requests", headers=h(facility_token), json=payload, timeout=90)
         assert r.status_code == 403, f"expected 403 got {r.status_code}: {r.text[:300]}"
@@ -245,7 +245,7 @@ class TestSuspendBlocksBooking:
         payload = {
             "pickup_address": PICKUP, "dropoff_address": DROPOFF,
             "item_category": "lab_sample", "handling_flags": [],
-            "item_count": 1, "recipient_name": "TEST Inflight", "recipient_phone": "4165550001", "requested_pickup_time": "2026-07-20T10:00:00Z",
+            "item_count": 1, "recipient_name": "TEST Inflight", "recipient_phone": "4165550001", "requested_pickup_time": "2026-07-20T10:00:00Z", "consent_data_handling": True,
         }
         r = requests.post(f"{API}/facility/requests", headers=h(facility_token), json=payload, timeout=90)
         assert r.status_code == 201, r.text[:300]
@@ -269,7 +269,7 @@ class TestPerDeliveryRatePricing:
         payload = {
             "pickup_address": PICKUP, "dropoff_address": DROPOFF,
             "item_category": "lab_sample", "handling_flags": flags,
-            "item_count": 1, "recipient_name": name, "recipient_phone": "4165550002", "requested_pickup_time": "2026-07-20T10:00:00Z",
+            "item_count": 1, "recipient_name": name, "recipient_phone": "4165550002", "requested_pickup_time": "2026-07-20T10:00:00Z", "consent_data_handling": True,
         }
         return requests.post(f"{API}/facility/requests", headers=h(facility_token), json=payload, timeout=90)
 
@@ -313,7 +313,7 @@ class TestCommissionOverride:
         payload = {
             "pickup_address": PICKUP, "dropoff_address": DROPOFF,
             "item_category": "lab_sample", "handling_flags": [],
-            "item_count": 1, "recipient_name": name, "recipient_phone": "4165550003", "requested_pickup_time": "2026-07-20T10:00:00Z",
+            "item_count": 1, "recipient_name": name, "recipient_phone": "4165550003", "requested_pickup_time": "2026-07-20T10:00:00Z", "consent_data_handling": True,
         }
         r = requests.post(f"{API}/facility/requests", headers=h(facility_token), json=payload, timeout=90)
         assert r.status_code == 201, r.text[:300]

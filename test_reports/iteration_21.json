@@ -1,0 +1,76 @@
+{
+  "summary": "Tested the health-data hardening feature end-to-end (backend + frontend). New suite /app/backend/tests/test_health_data_hardening.py (30 tests, 27 pass). Verified: (1) Field-level Fernet encryption — booked jobs store recipient_name/recipient_phone as 'enc::' in raw Mongo, plaintext returned to facility/admin/assigned driver; custody 'delivered' event stores enc:: recipient_name + recipient_relationship; custody list, custody-record PDF (200, %PDF), dispatch board, facility deliveries/billing/export, admin billing summary/invoices/driver-statements, breach report, missing-POD, sms-outbox, audit-logs all return plaintext with no ciphertext; SMS dev outbox rows carry the real +1416... number and plaintext bodies; migration check confirms 0 plaintext PII left at rest in jobs/custody_events. (2) Least privilege — unassigned driver1 gets only masked pickup_area/dropoff_area (recipient_name/phone/pickup_address/delivery_address null, no billing_email/per_delivery_rate), full data revealed after accept. (3) Consent gate — booking without consent_data_handling -> 422 with clear message; with it -> job.consent {delivery_and_data_handling, captured_by, captured_at, policy_version '1.0'}. (4) Privacy gate — register without privacy_policy_accepted -> 422; with it privacy_policy {version, accepted_at} in register/login/me; POST /auth/accept-privacy sets it for a legacy user and writes an audit entry; 401 unauthenticated. (5) Residency — ca-central, 3 components, encryption + attestation text, driver 403, anon 401. (6) Audit immutability — intact:true with 5283 entries (>=4877); tamper (edited action) detected at exact seq with 'edited' wording and restored to intact; mid-chain deletion detected as 'deleted'; no PUT/PATCH/DELETE routes for audit logs (404/405); chain keeps incrementing/intact after normal operations. Frontend (Playwright, 1920x1080): /privacy public page renders; register privacy checkbox + /privacy link, blocked with inline error when unchecked, succeeds when checked with NO gate modal after; facility Book Transport has REQUIRED emerald data-consent-checkbox above SMS consent, browser blocks submit without it, booking succeeds and the recipient name renders in plaintext in My Deliveries; Admin Compliance shows residency card (ca-central badge + 3 rows + encryption/attestation text) and Audit log integrity card (verify-integrity-btn -> green 'Chain intact — 5247 entries verified'); Revenue tab, dispatch board, driver Job Board masking and driver onboarding page all render fine. Regression pytest: test_admin_compliance.py, test_facility_portal.py, test_driver_available_jobs.py, test_auth_hardening.py -> 61/62 pass (only the pre-existing brute-force-lockout test fails). Auth playbook: password_hash starts with $2b$, login over HTTPS, JWT in body (key access_token) — no app auth cookie is set (token kept in localStorage by design).",
+  "backend_issues": {
+    "critical": [
+      {
+        "endpoint": "POST /api/jobs/{id}/custody-events",
+        "issue": "Response body returns the ENCRYPTED document: recipient_name/recipient_relationship come back as 'enc::gAAAA...' because the handler encrypts `doc` in place and then returns `{**doc, ...}` (server.py ~2618-2657) without dec_event(). Any client that renders the POST result shows ciphertext. Fix: build the response from a decrypted copy (e.g. `return {**dec_event(dict(doc)), 'job_status': ..., 'settlement': ...}`).",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "GET /api/custody-events/{event_id}",
+        "issue": "Returns the raw Mongo document without dec_event() (server.py ~2779-2789) -> recipient_name/recipient_relationship leak as 'enc::...' to any authorized reader.",
+        "priority": "HIGH"
+      },
+      {
+        "endpoint": "GET /api/admin/jobs",
+        "issue": "Returns raw job docs without dec_job() (server.py ~2108-2111) -> recipient_name/recipient_phone leak as 'enc::...' in the admin jobs list payload (currently not rendered by the Admin UI, but it violates the 'no enc:: in any API response' requirement and would break any future admin view/export).",
+        "priority": "HIGH"
+      }
+    ],
+    "minor": [
+      {
+        "endpoint": "GET /api/admin/compliance/audit-integrity",
+        "issue": "Truncation attack is undetectable: deleting the newest N entries (tail) still reports intact:true (verified by deleting seq 5283 -> intact:true, entries_checked 5282). Mid-chain deletion and edits are detected. Consider persisting the last known seq/head hash (e.g. in a settings doc or the response of a periodic attestation) to detect truncation."
+      },
+      {
+        "endpoint": "POST /api/auth/login",
+        "issue": "Pre-existing: no brute-force lockout — 6 consecutive wrong passwords all return 401 and the valid login still succeeds (tests/test_auth_hardening.py::test_brute_force_lockout_after_5_failures fails, same as previous iterations)."
+      }
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {
+        "component": "PrivacyGate.jsx",
+        "issue": "CRITICAL LOCKOUT: the 'Accept and continue' button has computed display:none, so the blocking privacy modal can never be satisfied — and it also cannot be dismissed (Escape and outside click are preventDefault-ed). RCA: DialogContent className uses `[&>button]:hidden` (line 33) to hide the shadcn close button, but that direct-child selector also hides the accept Button (line 53), which is a direct child of DialogContent. Verified in the browser: btnStyles.display = 'none', offsetParent null, normal and force clicks both fail with 'Element is not visible'. Impact: 45 of 46 existing users (incl. gabrielosmanhamza@yahoo.com, driver1, facility1, dispatcher1) have no privacy_policy field, so every one of them is permanently locked out of the app at login. Fix: scope the hide to the close button only (e.g. `[&>button.absolute]:hidden`) or add a `hideClose` prop to DialogContent. After un-hiding the button in the test DOM the accept flow works correctly (POST /auth/accept-privacy, toast, modal closes, no modal after re-login).",
+        "selector": "[data-testid=\"privacy-gate-accept-btn\"]",
+        "priority": "CRITICAL"
+      }
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {
+        "screen": "Driver onboarding (/onboarding) and Admin Compliance audit-log filters",
+        "issues": ["Native browser date pickers (mm/dd/yyyy inputs) used for insurance expiry and audit From/To filters instead of the shadcn calendar component (pre-existing)"]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_health_data_hardening.py",
+    "/app/test_reports/pytest/hardening_results.xml"
+  ],
+  "action_items": [
+    "FIX FIRST (app-wide lockout): PrivacyGate DialogContent `[&>button]:hidden` also hides the accept button — scope it to the close button (`[&>button.absolute]:hidden`) or add a hideClose prop.",
+    "Decrypt before responding in POST /api/jobs/{id}/custody-events (return dec_event copy).",
+    "Add dec_event() to GET /api/custody-events/{event_id}.",
+    "Add dec_job() to GET /api/admin/jobs.",
+    "Optional: record the audit chain head (last seq + hash) so tail truncation is detectable.",
+    "Optional (pre-existing): implement login lockout after 5 failed attempts."
+  ],
+  "critical_code_review_comments": [
+    "PrivacyGate: a non-dismissible dialog whose only action can be CSS-hidden is a single point of total lockout — add an integration test that clicks privacy-gate-accept-btn without force.",
+    "Encryption is applied at write points and decrypted per-endpoint; three of ~15 read paths were missed. Consider a single response serializer (or a projection helper used by every jobs/custody read) instead of sprinkling dec_job/dec_event, so new endpoints cannot leak ciphertext.",
+    "server.py is 4199 lines — split into routers (auth, jobs, facility, admin/compliance, billing) per the >700 line guideline."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_health_data_hardening.py"
+  ],
+  "success_rate": {"backend": "90% (27/30 new tests; 61/62 regression)", "frontend": "88% (all flows pass except the privacy-gate accept button)"},
+  "seed_data_creation": "Created and deleted temporary TEST_ users (TEST_priv_*, TEST_chain_*, TEST_fe_*) and TEST_ jobs/custody events/SMS outbox rows; the UI-booked job d8b33507 was deleted. NOTE: to be able to test the rest of the UI past the broken privacy modal I called POST /api/auth/accept-privacy for the four shared accounts (admin, dispatcher1, driver1, facility1) — they now have privacy_policy set. 41 other legacy users still have no privacy_policy, so the lockout bug is still reproducible by logging in as e.g. newdriver@test.com (NewDriver@123), or by unsetting privacy_policy on a fresh TEST user.",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "As provided in /app/memory/test_credentials.md (admin/dispatcher1/driver1/facility1); create fresh TEST_ users for privacy-gate testing.",
+  "context_for_next_testing_agent": "Run `pytest /app/backend/tests/test_health_data_hardening.py` — 3 failures are the ciphertext leak points (admin/jobs, POST custody-events, GET custody-events/{id}); they should pass after the fix. Encryption, consent, privacy gate, residency, audit tamper/mid-chain-delete detection all verified. Frontend: only PrivacyGate accept button is broken (CSS display:none from [&>button]:hidden); to re-test the modal, unset privacy_policy on a fresh TEST user (never on shared accounts) and click privacy-gate-accept-btn WITHOUT force to confirm the fix. Tail truncation of the audit chain is undetectable by design today.",
+  "rca_of_the_issue": "1) PrivacyGate lockout: Tailwind arbitrary variant `[&>button]:hidden` on DialogContent matches every direct child button, including the accept Button, giving it display:none; combined with onEscapeKeyDown/onInteractOutside preventDefault the modal is unescapable, locking out the 45 users that lack a privacy_policy field. 2) Ciphertext leaks: enc_pii is applied at write time and dec_job/dec_event are applied per read endpoint; POST /api/jobs/{id}/custody-events returns the just-encrypted doc, GET /api/custody-events/{id} and GET /api/admin/jobs return raw Mongo docs, so all three emit 'enc::' strings."
+}

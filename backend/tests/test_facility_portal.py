@@ -60,7 +60,7 @@ def make_payload(**over):
         "item_category": "lab_sample",
         "handling_flags": ["cold_chain", "urgent"],
         "special_instructions": "TEST_ leave cooler at front desk",
-        "requested_pickup_time": "2026-07-20T14:30",
+        "requested_pickup_time": "2026-07-20T14:30", "consent_data_handling": True,
     }
     p.update(over)
     return p

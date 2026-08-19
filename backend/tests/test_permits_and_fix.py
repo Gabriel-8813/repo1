@@ -28,7 +28,7 @@ def _ensure(email, password, full_name, phone):
     if r.status_code == 200:
         return r.json()
     rr = requests.post(f"{API}/auth/register",
-                       json={"email": email, "password": password, "full_name": full_name, "phone": phone},
+                       json={ "privacy_policy_accepted": True, "email": email, "password": password, "full_name": full_name, "phone": phone},
                        timeout=15)
     if rr.status_code == 200:
         return rr.json()
