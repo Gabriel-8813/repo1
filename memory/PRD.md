@@ -160,6 +160,15 @@ Build an app for medical transportation that people can register and pay a month
 - **Fixes from testing (iteration_11)**: HIGH — /payments/balance/checkout 500 with 13+ ledger entries (Stripe 500-char metadata cap; now passes ledger_count only, settlement always used the payment_transactions doc) — verified 200 with 16 entries; dashboard mobile overflow fixed (icon-only nav buttons on mobile, responsive balance alert + jobs widget with masked areas/payout fallback); **patched platform babel plugin** (/app/frontend/plugins/visual-edits/babel-metadata-plugin.js line 876 null-guard) which crashed builds on cross-file prop tracing
 - **Tested**: 12 new pytest cases (tests/test_driver_available_jobs.py) + full suite 138/138 green; Playwright mobile E2E (accept→reveal→grace countdown→cancel, decline removal) verified
 
+### Active Delivery Flow (June 2026)
+- **New /delivery/:jobId page** (ActiveDeliveryPage.js, mobile-first, verified-driver route). JobsPage active card: one-tap Complete removed — replaced by Start/Continue Delivery (compliant handoff enforced in UI; legacy POST /complete endpoint kept for admin/tests)
+- **Stage 1 Pickup**: full address + Google Maps Navigate; required checklist (label name match, item count, + insulated-cooler for cold-chain) enforced SERVER-SIDE in create_custody_event (400 lists missing items); Confirm Pickup → custody_event pickup_confirmed (GPS+ts) → status picked_up
+- **Stage 2 In Transit**: dropoff + Navigate; automatic in_transit_ping custody events every 60s (first ping flips picked_up→in_transit; 2 consecutive failures toast a warning); Arrived button (persisted in localStorage so reload keeps Stage 3)
+- **Stage 3 Delivery (no leave-at-door)**: on-screen signature canvas OR government-ID photo (highlighted for id_required jobs) uploaded via POST /jobs/{id}/delivery-evidence (Emergent Object Storage; served at /api/delivery-evidence/{id}/file with job-access RBAC + ?auth=); recipient_name required (+ relationship if not the patient); Mark Delivered → custody_event delivered (server rejects without evidence/recipient) → settle_job_completion helper (shared with legacy /complete: earnings, owed commission ledger, total_trips) → status delivered. Tips/reviews/stats now accept status delivered alongside completed
+- **Exception path**: Customer Unavailable → delivery_attempted event → return stage (navigate back to pickup) → Confirm Return → returned event + status returned + `notifications` collection entries for facility owner/poster + all dispatchers (GET /api/notifications, PUT /api/notifications/{id}/read). Item never abandoned; returned requires a prior delivery_attempted (server-enforced)
+- GPS optional (denied → events store null + UI "location unavailable" warning); aria-labels on recipient inputs
+- **Tested**: iteration_12 — 18 new pytest (tests/test_active_delivery.py, self-seeding), full suite 156/156; complete mobile Playwright E2E of both happy path (delivered w/ signature, settlement $42.50/−$8.50/net $34) and exception path (returned + notifications). Two demo open jobs re-seeded on the board
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

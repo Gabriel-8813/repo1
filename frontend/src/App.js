@@ -20,6 +20,7 @@ import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FacilityHomePage from "./pages/FacilityHomePage";
 import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
+import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
 
 // Protected Route Component (kept for generic authed pages)
 // eslint-disable-next-line no-unused-vars
@@ -165,6 +166,14 @@ function AppRoutes() {
         element={
           <VerifiedDriverRoute>
             <JobsPage />
+          </VerifiedDriverRoute>
+        } 
+      />
+      <Route 
+        path="/delivery/:jobId" 
+        element={
+          <VerifiedDriverRoute>
+            <ActiveDeliveryPage />
           </VerifiedDriverRoute>
         } 
       />

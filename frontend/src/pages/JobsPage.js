@@ -13,7 +13,7 @@ import {
   AlertDialogTrigger
 } from '../components/ui/alert-dialog';
 import {
-  Truck, MapPin, Clock, CheckCircle, ArrowDown, LogOut, XCircle,
+  Truck, MapPin, Clock, ArrowDown, LogOut, XCircle, Navigation,
   Link as LinkIcon, Snowflake, Zap, PenLine, CreditCard, Lock, Package, Building2, EyeOff
 } from 'lucide-react';
 import { toast } from 'sonner';
@@ -125,19 +125,6 @@ const JobsPage = () => {
       toast.error(error.response?.data?.detail || 'Failed to decline job');
     } finally {
       setBusyJobId(null);
-    }
-  };
-
-  const handleCompleteJob = async (jobId) => {
-    try {
-      const r = await axios.post(`${API}/jobs/${jobId}/complete`, {}, {
-        headers: { Authorization: `Bearer ${token}` }
-      });
-      const { gross_earnings, commission_charged, net_earnings } = r.data;
-      toast.success(`Trip complete! Gross $${gross_earnings?.toFixed(2)} − commission $${commission_charged?.toFixed(2)} = net $${net_earnings?.toFixed(2)}`);
-      fetchJobs();
-    } catch (error) {
-      toast.error(error.response?.data?.detail || 'Failed to complete job');
     }
   };
 
@@ -449,11 +436,12 @@ const JobsPage = () => {
                                     </AlertDialogContent>
                                   </AlertDialog>
                                   <Button
-                                    className="h-11 bg-emerald-600 hover:bg-emerald-700 rounded-full"
-                                    onClick={() => handleCompleteJob(job.id)}
-                                    data-testid={`complete-job-${job.id}-btn`}
+                                    className="h-11 bg-blue-600 hover:bg-blue-700 rounded-full"
+                                    onClick={() => navigate(`/delivery/${job.id}`)}
+                                    data-testid={`start-delivery-${job.id}-btn`}
                                   >
-                                    <CheckCircle className="w-4 h-4 mr-2" /> Complete
+                                    <Navigation className="w-4 h-4 mr-2" />
+                                    {['picked_up', 'in_transit'].includes(job.status) ? 'Continue Delivery' : 'Start Delivery'}
                                   </Button>
                                 </div>
                               </div>
