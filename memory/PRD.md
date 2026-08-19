@@ -127,6 +127,16 @@ Build an app for medical transportation that people can register and pay a month
 - **JOBS extended additively**: facility_id (validated to exist), item_category, handling_flags, distance_km, payout_amount, special_instructions ("non-clinical handling notes only" — no clinical/PHI fields), assigned_driver_id, picked_up_at, delivered_at. Legacy aliases auto-synced both ways: dropoff_address↔delivery_address, payout_amount↔offered_price, distance_km↔estimated_distance_km, assigned_driver_id↔accepted_by. New endpoints: `GET/PUT/DELETE /api/jobs/{id}`; PUT auto-stamps accepted_at/picked_up_at/delivered_at on status transitions. Old driver UI payloads/statuses fully backward compatible
 - **No UI built yet** (per user request). Tested via full curl smoke suite (users/drivers/facilities/jobs CRUD, enum 422 validation, RBAC 403s, lifecycle timestamps, legacy compat) — all passing
 
+### RBAC + Role Routing + Job Audit Log (June 2026)
+- **Role guards**: `require_staff` (admin|dispatcher) added alongside `require_admin`. Four roles fully supported: driver, facility, dispatcher, admin
+- **Role-based login routing**: `roleHome()` in AuthContext — admin→/admin, facility→/facility (placeholder Facility Portal), dispatcher→/dispatch (placeholder Dispatch Console), driver→/dashboard. `RoleRoute` guard in App.js redirects cross-role access to the user's own home. Test users: facility1@test.com, dispatcher1@test.com (see test_credentials.md)
+- **Job data scoping (API level)**: drivers see only open jobs + their own, with a logistics-fields whitelist (no posted_by, no billing data); facilities see only jobs they posted or for facilities they own; staff (dispatcher/admin) see everything. Facility billing_email stripped from /api/facilities for non-owner non-staff callers; facility role lists only own facilities
+- **Verification gating**: drivers without an approved `drivers` record get 403 on job accept; PUT assignment/offer of an unverified driver returns 400
+- **Drivers cannot POST /api/jobs** (403); drivers can PUT only `status` on their assigned jobs
+- **Audit log** (`db.audit_logs`: id, actor_id, actor_role, action, entity, entity_id, timestamp) written on every job create/update/view/accept/cancel/complete/delete — write is fail-safe (never breaks the request). `GET /api/audit-logs` (staff only) with entity/entity_id/actor_id/action filters. Indexes on audit_logs + jobs query fields
+- **Tested**: 30/30 backend pytest (`/app/backend/tests/test_rbac_marketplace.py`, reusable regression suite) + all frontend role-login/guard/logout flows via Playwright — zero issues (iteration_9)
+- **Known note**: visual-edits babel plugin crashes on component-as-prop patterns across files — placeholder pages kept self-contained
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

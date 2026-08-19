@@ -2,7 +2,7 @@ import React from "react";
 import "@/App.css";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { Toaster } from "./components/ui/sonner";
-import { AuthProvider, useAuth } from "./context/AuthContext";
+import { AuthProvider, useAuth, roleHome } from "./context/AuthContext";
 
 // Pages
 import LandingPage from "./pages/LandingPage";
@@ -17,8 +17,11 @@ import TipPage from "./pages/TipPage";
 import RatePage from "./pages/RatePage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
+import FacilityHomePage from "./pages/FacilityHomePage";
+import DispatchHomePage from "./pages/DispatchHomePage";
 
-// Protected Route Component
+// Protected Route Component (kept for generic authed pages)
+// eslint-disable-next-line no-unused-vars
 const ProtectedRoute = ({ children }) => {
   const { isAuthenticated, loading } = useAuth();
 
@@ -37,9 +40,9 @@ const ProtectedRoute = ({ children }) => {
   return children;
 };
 
-// Public Route - redirect to dashboard if authenticated
+// Public Route - redirect to role home if authenticated
 const PublicRoute = ({ children }) => {
-  const { isAuthenticated, loading } = useAuth();
+  const { isAuthenticated, loading, user } = useAuth();
 
   if (loading) {
     return (
@@ -50,8 +53,26 @@ const PublicRoute = ({ children }) => {
   }
 
   if (isAuthenticated) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to={roleHome(user)} replace />;
   }
+
+  return children;
+};
+
+// Role Route - requires one of the given roles
+const RoleRoute = ({ children, roles }) => {
+  const { isAuthenticated, loading, user } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+      </div>
+    );
+  }
+
+  if (!isAuthenticated) return <Navigate to="/login" replace />;
+  if (!roles.includes(user?.role)) return <Navigate to={roleHome(user)} replace />;
 
   return children;
 };
@@ -69,7 +90,7 @@ const AdminRoute = ({ children }) => {
   }
 
   if (!isAuthenticated) return <Navigate to="/login" replace />;
-  if (user?.role !== 'admin') return <Navigate to="/dashboard" replace />;
+  if (user?.role !== 'admin') return <Navigate to={roleHome(user)} replace />;
 
   return children;
 };
@@ -104,33 +125,49 @@ function AppRoutes() {
       <Route 
         path="/dashboard" 
         element={
-          <ProtectedRoute>
+          <RoleRoute roles={['driver', 'admin']}>
             <DashboardPage />
-          </ProtectedRoute>
+          </RoleRoute>
         } 
       />
       <Route 
         path="/jobs" 
         element={
-          <ProtectedRoute>
+          <RoleRoute roles={['driver', 'admin']}>
             <JobsPage />
-          </ProtectedRoute>
+          </RoleRoute>
         } 
       />
       <Route 
         path="/permits" 
         element={
-          <ProtectedRoute>
+          <RoleRoute roles={['driver', 'admin']}>
             <PermitsPage />
-          </ProtectedRoute>
+          </RoleRoute>
         } 
       />
       <Route 
         path="/billing" 
         element={
-          <ProtectedRoute>
+          <RoleRoute roles={['driver', 'admin']}>
             <BillingPage />
-          </ProtectedRoute>
+          </RoleRoute>
+        } 
+      />
+      <Route 
+        path="/facility" 
+        element={
+          <RoleRoute roles={['facility', 'admin']}>
+            <FacilityHomePage />
+          </RoleRoute>
+        } 
+      />
+      <Route 
+        path="/dispatch" 
+        element={
+          <RoleRoute roles={['dispatcher', 'admin']}>
+            <DispatchHomePage />
+          </RoleRoute>
         } 
       />
       <Route 

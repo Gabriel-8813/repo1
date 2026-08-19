@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, roleHome } from '../context/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -23,9 +23,9 @@ const LoginPage = () => {
     setLoading(true);
 
     try {
-      await login(email, password);
+      const userData = await login(email, password);
       toast.success('Welcome back!');
-      navigate('/dashboard');
+      navigate(roleHome(userData));
     } catch (err) {
       setError(err.response?.data?.detail || 'Login failed. Please check your credentials.');
     } finally {
