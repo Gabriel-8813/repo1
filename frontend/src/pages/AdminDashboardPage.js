@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from '../components/NotificationBell';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
 import ChangePasswordDialog from '../components/ChangePasswordDialog';
@@ -254,6 +255,7 @@ const AdminDashboardPage = () => {
               <Crown className="w-3 h-3" /> Admin
             </Badge>
             <ChangePasswordDialog token={token} />
+            <NotificationBell />
             <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="admin-logout-btn">
               <LogOut className="w-4 h-4 mr-2" /> Logout
             </Button>

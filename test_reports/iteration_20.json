@@ -1,0 +1,60 @@
+{
+  "summary": "Tested the new real-time notification feature end-to-end (backend + frontend). Created /app/backend/tests/test_notifications_sms.py (23 tests, 21 pass): dev-mode SMS outbox flow (assigned -> out_for_delivery -> arriving -> delivered with /confirm link, each sent exactly once, all bodies end 'Reply STOP to opt out.', status dev_outbox, twilio_configured=false), CASL (zero SMS for a no-consent job at every stage), STOP/START Twilio webhook + blocked_optout on subsequent send, admin SMS outbox/opt-out endpoints incl. RBAC + 422 validation, public /api/public/confirm/{token} GET+POST (rating creates one review titled 'Delivery recipient', second POST returns rating_saved=false, bad token 404, facility owner gets recipient_confirmed), notifications list/read (all + ids), per-user isolation, facility lifecycle notifications, driver-cancel/staff-cancel dispatcher alerts and stale_job dedupe. Frontend verified with Playwright: NotificationBell on /admin, /dispatch (dark), facility portal, driver /dashboard and /jobs (panel opens, items render, mark-all-read clears badge), Admin Compliance SMS outbox table + 'Dev mode' badge + opt-out add/remove, facility CASL consent checkbox (booking persisted recipient_sms_consent=true), driver arriving-soon button (toast 'Recipient notified by SMS' + disables), public /confirm/{token} page (stars, comment, thank-you, revisit thank-you, invalid token error). Regression: all existing pytest suites pass except 2 pre-existing failures. Cleaned all TEST_ jobs/notifications/outbox rows and restored driver1/facility1 to no-active-job state.",
+  "backend_issues": {
+    "critical": [
+      {"endpoint": "PUT /api/jobs/{id} (assigned_driver_id on a facility-booked job)", "issue": "Driver receives NO job_offer in-app notification in the main dispatch flow. Facility bookings are created with status 'offered' (POST /api/facility/requests, server.py ~3138) while assigned_driver_id is null, so when a dispatcher later assigns a driver the status does not change and the 'if new_status and new_status != job.status' guard (server.py ~2426) skips notify_user. Verified: assigning driver1 to a fresh facility-booked job produced 0 notifications; the same job moved to 'open' first and then offered does notify. Fix: fire job_offer whenever assigned_driver_id changes (or create facility requests with status 'open').", "priority": "HIGH"}
+    ],
+    "minor": [
+      {"endpoint": "POST /api/jobs/{id}/custody-events (event_type=returned)", "issue": "Two notifications per return for dispatchers: legacy notify_job_return() writes a doc with only a 'message' field (no title/body) plus the new notify_dispatchers('job_returned') doc. The legacy doc renders as an empty row in NotificationBell (it reads n.title/n.body). 16 such title-less docs existed in db.notifications. Remove notify_job_return() or migrate it to notify_user()."},
+      {"endpoint": "GET /api/notifications", "issue": "Route is declared twice (server.py 2684 and 3837); the first declaration wins, so the ?limit param is ignored and 'unread' is computed only from the newest 50 rows (undercounts when more than 50 unread). Delete the older duplicate."},
+      {"endpoint": "GET /api/jobs/available", "issue": "Pre-existing regression failure tests/test_driver_available_jobs.py::TestAvailableMasking::test_only_open_or_offered_to_me — facility-booked jobs appear with status 'offered' and assigned_driver_id null, violating the offer semantics (same root cause as the HIGH issue above)."},
+      {"endpoint": "POST /api/auth/login", "issue": "Pre-existing: no brute-force lockout — 6 consecutive wrong passwords all return 401 and the valid login still succeeds (tests/test_auth_hardening.py::test_brute_force_lockout_after_5_failures fails). Playbook expects 423/429 after 5 failures."},
+      {"endpoint": "CORS / auth transport", "issue": "Pre-existing: CORSMiddleware uses allow_credentials=True with CORS_ORIGINS=\"*\" (backend/.env) — browsers reject credentialed wildcard origins; and login returns a bearer token only (no httpOnly cookie), so the playbook cookie requirement is unmet."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "NotificationBell", "issue": "Legacy title-less job_returned notifications render as blank rows (title/body undefined) — data-side bug listed above; UI should also guard with n.title || n.message fallback", "selector": "[data-testid^='notification-item-']", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Facility portal - Book Transport", "issues": ["'Requested pickup time' uses the native browser datetime-local picker instead of the shadcn calendar/time control (pre-existing); leaving it empty silently blocks submit with only the native tooltip"]},
+      {"screen": "Driver Active Delivery (desktop 1920px)", "issues": ["Mobile-first card is top-aligned leaving a very large empty area below on desktop; no notification bell on this screen (not required by spec)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_notifications_sms.py",
+    "/app/test_reports/pytest/notif_sms.xml",
+    "/app/test_reports/seed_notif_ui.py",
+    "/app/test_reports/cleanup_it20.py",
+    "/app/test_reports/inspect_notif20.py",
+    "/app/test_reports/probe_cancel_notif.py"
+  ],
+  "action_items": [
+    "Fire job_offer notification when assigned_driver_id is set on an already-'offered' job (or create facility requests with status 'open') — drivers currently get no in-app offer alert from the dispatch board",
+    "Remove the legacy notify_job_return()/notify_users() path (message-only docs) or convert it to title/body so returned-job notifications are not blank and not duplicated",
+    "Delete the duplicate GET /api/notifications route at server.py ~2684 so the limit param and full unread count work",
+    "Optional/pre-existing: add login brute-force lockout (423/429 after 5 fails) and set explicit CORS_ORIGINS since allow_credentials=True"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 4071 lines — split into routers (jobs, sms/notifications, admin, facility) per the 700-line guideline",
+    "Two notification writers coexist (notify_user with title/body and legacy notify_users with message) — a single schema is needed or the bell will keep showing blank items",
+    "Duplicate route declarations (GET /notifications) silently shadow later handlers; add a route-uniqueness check",
+    "send_recipient_sms sets sms_flags.{kind}=True even when the send was blocked_optout/skipped_invalid_number, so a later legitimate send of that kind is permanently suppressed for that job"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_notifications_sms.py",
+    "/app/test_reports/seed_notif_ui.py",
+    "/app/test_reports/cleanup_it20.py",
+    "/app/test_reports/inspect_notif20.py",
+    "/app/test_reports/probe_cancel_notif.py",
+    "/app/test_reports/iteration_20.json"
+  ],
+  "success_rate": {"backend": "91% (21/23 new-feature tests; full regression 268 passed, 2 pre-existing failures)", "frontend": "100% of requested notification/SMS UI flows"},
+  "seed_data_creation": "Temporary TEST_QA facility bookings (with/without SMS consent), one delivered job used to obtain a /confirm token, one picked_up job for the arriving-soon UI test, and transient opt-out entries — ALL removed by /app/test_reports/cleanup_it20.py (11 TEST_ jobs, 310 orphan notifications, related custody/sms/evidence/review/ledger rows deleted; driver1 has 0 active jobs, 6 real jobs remain, 0 opt-outs)",
+  "should_call_test_agent_after_fix": true,
+  "should_main_agent_self_test": false,
+  "test_credentials": "Used /app/memory/test_credentials.md as-is (admin gabrielosmanhamza@yahoo.com/Admin@123, dispatcher1@test.com/Dispatch@123, driver1@test.com/Driver@123, facility1@test.com/Facility@123) — all valid",
+  "context_for_next_testing_agent": "Re-run /app/backend/tests/test_notifications_sms.py — 2 failing tests are intentional bug documentation: test_driver_job_offer_when_assigned_to_pool_job (no job_offer on pool-job assignment) and test_returned_event_notifies_dispatchers (blank legacy job_returned notification). Use /app/test_reports/seed_notif_ui.py to regenerate a confirm token + an in-transit job for UI tests, and /app/test_reports/cleanup_it20.py afterwards. Facility bookings are created in status 'offered' with assigned_driver_id=null — remember this when testing offer semantics or driver available-jobs masking. Login token key is access_token; Twilio is unconfigured so every SMS lands in db.sms_outbox with status dev_outbox.",
+  "rca_of_the_issue": "Job-offer notifications hinge on a status transition ('if new_status and new_status != job.status'). Because POST /api/facility/requests inserts jobs already in status 'offered' with no driver, a dispatcher assigning a driver produces no status change and therefore no notify_user() call, so drivers never see the offer in the bell. Separately, the 'returned' custody event calls both the legacy notify_job_return() (writes a 'message'-only doc) and the new notify_dispatchers(), producing a duplicate plus a blank-rendering notification."
+}

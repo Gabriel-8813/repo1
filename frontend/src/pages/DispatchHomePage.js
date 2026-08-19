@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from '../components/NotificationBell';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '../components/ui/dialog';
@@ -89,6 +90,7 @@ export default function DispatchHomePage() {
         <div className="flex items-center gap-3">
           <span className="text-xs text-slate-300 hidden sm:block">{user?.full_name}</span>
           <span className="text-[11px] text-emerald-400 flex items-center gap-1"><span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span> live</span>
+          <NotificationBell dark />
           <Button variant="ghost" size="sm" className="text-white hover:bg-white/10" onClick={() => { logout(); navigate('/login'); }} data-testid="role-home-logout-btn">
             <LogOut className="w-4 h-4" />
           </Button>

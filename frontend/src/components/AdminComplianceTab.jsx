@@ -37,6 +37,25 @@ export const AdminComplianceTab = () => {
   const [breach, setBreach] = useState(null);
   const [custodyJobId, setCustodyJobId] = useState('');
   const [loading, setLoading] = useState(true);
+  const [smsData, setSmsData] = useState(null);
+  const [optoutPhone, setOptoutPhone] = useState('');
+
+  const loadSms = useCallback(async () => {
+    try {
+      const r = await axios.get(`${API}/admin/sms-outbox`, { headers });
+      setSmsData(r.data);
+    } catch { /* staff only */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  const manageOptout = async (phone, action) => {
+    try {
+      await axios.post(`${API}/admin/sms-optouts`, { phone, action }, { headers });
+      toast.success(action === 'add' ? 'Number opted out' : 'Opt-out removed');
+      setOptoutPhone('');
+      loadSms();
+    } catch (e) { toast.error(e.response?.data?.detail || 'Failed'); }
+  };
 
   const loadLogs = useCallback(async (f) => {
     const p = new URLSearchParams();
@@ -66,7 +85,7 @@ export const AdminComplianceTab = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  useEffect(() => { loadAll(); loadLogs(filters); }, [loadAll]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadAll(); loadLogs(filters); loadSms(); }, [loadAll, loadSms]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const saveRetention = async () => {
     try {
@@ -302,6 +321,58 @@ export const AdminComplianceTab = () => {
                 <p>{breach.summary.unique_recipients} recipient{breach.summary.unique_recipients === 1 ? '' : 's'} · {breach.summary.drivers_involved} driver{breach.summary.drivers_involved === 1 ? '' : 's'} · {breach.summary.facilities_involved} facilit{breach.summary.facilities_involved === 1 ? 'y' : 'ies'}</p>
               </div>
             )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid lg:grid-cols-3 gap-4">
+        <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)] lg:col-span-2">
+          <CardContent className="p-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-sm font-bold text-slate-900">SMS outbox (CASL)</p>
+              <Badge className={smsData?.twilio_configured ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'} data-testid="twilio-mode-badge">
+                {smsData?.twilio_configured ? 'Twilio live' : 'Dev mode — messages stored, not sent'}
+              </Badge>
+            </div>
+            <div className="max-h-72 overflow-y-auto">
+              <Table data-testid="sms-outbox-table">
+                <TableHeader><TableRow><TableHead>Time</TableHead><TableHead>To</TableHead><TableHead>Type</TableHead><TableHead>Message</TableHead><TableHead>Status</TableHead></TableRow></TableHeader>
+                <TableBody>
+                  {(!smsData || smsData.messages.length === 0) && <TableRow><TableCell colSpan={5} className="text-center text-slate-400 text-sm py-4">No SMS messages yet.</TableCell></TableRow>}
+                  {(smsData?.messages || []).map((m) => (
+                    <TableRow key={m.id} data-testid={`sms-row-${m.id}`}>
+                      <TableCell className="text-xs whitespace-nowrap">{(m.created_at || '').slice(5, 16).replace('T', ' ')}</TableCell>
+                      <TableCell className="text-xs font-mono">{m.to_phone}</TableCell>
+                      <TableCell><Badge className="bg-slate-100 text-slate-600 text-[10px]">{m.kind}</Badge></TableCell>
+                      <TableCell className="text-[11px] text-slate-600 max-w-[260px] truncate" title={m.body}>{m.body}</TableCell>
+                      <TableCell>
+                        <Badge className={`text-[10px] ${m.status === 'sent' ? 'bg-emerald-100 text-emerald-700' : m.status === 'dev_outbox' ? 'bg-blue-100 text-blue-700' : 'bg-red-100 text-red-700'}`}>{m.status}</Badge>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
+          <CardContent className="p-4 space-y-3">
+            <p className="text-sm font-bold text-slate-900">SMS opt-outs</p>
+            <p className="text-xs text-slate-500">Numbers that replied STOP (or were added here) never receive SMS.</p>
+            <div className="flex gap-2">
+              <Input placeholder="+14165551234" value={optoutPhone} onChange={(e) => setOptoutPhone(e.target.value)} data-testid="optout-phone-input" />
+              <Button size="sm" variant="outline" className="rounded-full shrink-0" onClick={() => manageOptout(optoutPhone, 'add')} data-testid="optout-add-btn">Opt out</Button>
+            </div>
+            <div className="max-h-48 overflow-y-auto space-y-1" data-testid="optout-list">
+              {(smsData?.optouts || []).length === 0 && <p className="text-xs text-slate-400">No opt-outs.</p>}
+              {(smsData?.optouts || []).map((o) => (
+                <div key={o.phone} className="flex items-center justify-between bg-slate-50 rounded-lg px-3 py-1.5">
+                  <span className="text-xs font-mono">{o.phone} <span className="text-slate-400">({o.source})</span></span>
+                  <Button size="sm" variant="ghost" className="h-6 text-xs text-blue-600" onClick={() => manageOptout(o.phone, 'remove')} data-testid={`optout-remove-${o.phone}`}>Remove</Button>
+                </div>
+              ))}
+            </div>
           </CardContent>
         </Card>
       </div>

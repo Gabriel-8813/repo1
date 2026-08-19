@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from '../components/NotificationBell';
 import { useUrgentJobAlerts } from '../hooks/useUrgentJobAlerts';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
@@ -215,9 +216,12 @@ const JobsPage = () => {
               {user?.role === 'admin' && <Link to="/admin" className="nav-link text-purple-700">Admin</Link>}
             </div>
           </div>
-          <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn">
-            <LogOut className="w-4 h-4 mr-2" /> Logout
-          </Button>
+          <div className="flex items-center gap-1">
+            <NotificationBell />
+            <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn">
+              <LogOut className="w-4 h-4 mr-2" /> Logout
+            </Button>
+          </div>
         </div>
       </nav>
 
