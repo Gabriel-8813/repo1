@@ -219,6 +219,14 @@ Build an app for medical transportation that people can register and pay a month
 - **Frontend Facilities tab** in /admin: table with type/contact/volume/terms chips/status, Approve/Suspend quick actions, Edit dialog with pricing terms
 - Tested: iteration 17 — 20/20 new backend tests + 24/24 regression + all frontend flows green
 
+### Admin Billing / Commission Engine (June 2026)
+- **GET /api/admin/billing/summary|invoices|driver-statements?month=** (admin only): per-job breakdown (facility charge, driver gross, ledger-accurate commission incl. overrides w/ 20% fallback, driver net), monthly facility invoices (subtotal/13% HST/total/commission + line items), driver statements (trips/gross/commission/cancellation fees/net payable + items)
+- **GET /api/admin/billing/export?report=revenue|invoices|driver_statements|jobs** CSV exports (whitelist-validated); strict month validation (rejects 2026-13); Mongo range query on delivered_at/completed_at
+- **Job deletion now cascades** commission ledger + earnings rows; historical orphans cleaned (57 ledger, 74 earnings)
+- **Frontend Revenue tab** in /admin: month picker, 5 KPI cards, revenue-by-facility + by-region tables, invoices + driver statements tables with drill-down dialogs, 4 CSV buttons, loading skeleton
+- Tested: iteration 18 — 38 backend assertions + E2E math (20% + 10% override) + all frontend flows green; minor fixes re-verified (72/72 pytest)
+- Known backlog note: export endpoints pass JWT as ?auth= query param (existing app-wide pattern) — consider short-lived download tokens later
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

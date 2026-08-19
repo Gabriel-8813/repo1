@@ -1896,6 +1896,8 @@ async def admin_delete_job(job_id: str, admin: dict = Depends(require_admin)):
     result = await db.jobs.delete_one({"id": job_id})
     if result.deleted_count == 0:
         raise HTTPException(status_code=404, detail="Job not found")
+    await db.ledger.delete_many({"job_id": job_id, "type": "commission"})
+    await db.earnings.delete_many({"job_id": job_id})
     return {"status": "deleted", "job_id": job_id}
 
 @api_router.get("/admin/fees")
@@ -2279,6 +2281,8 @@ async def delete_job(job_id: str, current_user: dict = Depends(get_current_user)
     if not allowed:
         raise HTTPException(status_code=403, detail="Not authorized")
     await db.jobs.delete_one({"id": job_id})
+    await db.ledger.delete_many({"job_id": job_id, "type": "commission"})
+    await db.earnings.delete_many({"job_id": job_id})
     await log_audit(current_user, "delete", "job", job_id)
     return {"status": "deleted", "job_id": job_id}
 
@@ -3101,6 +3105,204 @@ async def admin_list_facilities(staff: dict = Depends(require_staff)):
             }
         })
     return {"facilities": out}
+
+# ---- Admin: Billing / Commission Engine ----
+async def _month_financials(month: str):
+    if not re.match(r"^\d{4}-(0[1-9]|1[0-2])$", month):
+        raise HTTPException(status_code=422, detail="month must be YYYY-MM")
+    y, m = int(month[:4]), int(month[5:7])
+    next_month = f"{y + 1}-01" if m == 12 else f"{y}-{m + 1:02d}"
+    done_range = {"$gte": f"{month}-01", "$lt": f"{next_month}-01"}
+    jobs = await db.jobs.find({
+        "status": {"$in": ["delivered", "completed"]},
+        "$or": [{"delivered_at": done_range}, {"delivered_at": None, "completed_at": done_range}]
+    }, {"_id": 0}).to_list(20000)
+    job_ids = [j["id"] for j in jobs]
+    commissions = {e["job_id"]: e async for e in db.ledger.find(
+        {"type": "commission", "job_id": {"$in": job_ids}}, {"_id": 0})}
+    cancel_fees = await db.ledger.find(
+        {"type": "cancellation_fee", "created_at": done_range}, {"_id": 0}).to_list(5000)
+    fac_ids = list({j["facility_id"] for j in jobs if j.get("facility_id")})
+    facilities = {f["id"]: f async for f in db.facilities.find({"id": {"$in": fac_ids}}, {"_id": 0})}
+    driver_ids = list({j.get("accepted_by") or j.get("assigned_driver_id") for j in jobs if j.get("accepted_by") or j.get("assigned_driver_id")})
+    driver_ids += [e["driver_id"] for e in cancel_fees if e.get("driver_id")]
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": list(set(driver_ids))}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
+    lines = []
+    for j in jobs:
+        gross = round(float(j.get("offered_price") or j.get("payout_amount") or 0), 2)
+        entry = commissions.get(j["id"])
+        commission = round(float(entry["amount"]), 2) if entry else round(gross * 0.20, 2)
+        did = j.get("accepted_by") or j.get("assigned_driver_id")
+        driver = users.get(did)
+        facility = facilities.get(j.get("facility_id"))
+        lines.append({
+            "job_id": j["id"],
+            "date": j.get("delivered_at") or j.get("completed_at"),
+            "title": j.get("title") or "Medical transport",
+            "facility_id": j.get("facility_id"),
+            "facility_name": facility.get("name") if facility else "Direct booking",
+            "driver_id": did,
+            "driver_name": driver.get("full_name") if driver else None,
+            "region": j.get("delivery_city") or j.get("pickup_city") or "Unknown",
+            "facility_charge": gross,
+            "driver_gross": gross,
+            "commission": commission,
+            "commission_rate": round(commission / gross, 4) if gross else 0.20,
+            "driver_net": round(gross - commission, 2)
+        })
+    return lines, cancel_fees, facilities, users
+
+@api_router.get("/admin/billing/summary")
+async def admin_billing_summary(month: Optional[str] = None, admin: dict = Depends(require_admin)):
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    lines, cancel_fees, facilities, users = await _month_financials(month)
+    gross = round(sum(l["facility_charge"] for l in lines), 2)
+    commission = round(sum(l["commission"] for l in lines), 2)
+    fees_total = round(sum(float(e.get("amount", 0)) for e in cancel_fees), 2)
+    by_facility, by_region = {}, {}
+    for l in lines:
+        f = by_facility.setdefault(l["facility_id"] or "direct", {"facility_id": l["facility_id"], "name": l["facility_name"], "trips": 0, "gross": 0, "commission": 0})
+        f["trips"] += 1; f["gross"] += l["facility_charge"]; f["commission"] += l["commission"]
+        r = by_region.setdefault(l["region"], {"region": l["region"], "trips": 0, "gross": 0, "commission": 0})
+        r["trips"] += 1; r["gross"] += l["facility_charge"]; r["commission"] += l["commission"]
+    for coll in (by_facility, by_region):
+        for v in coll.values():
+            v["gross"] = round(v["gross"], 2); v["commission"] = round(v["commission"], 2)
+    return {
+        "month": month,
+        "kpis": {
+            "completed_trips": len(lines),
+            "gross_delivery_value": gross,
+            "commission_earned": commission,
+            "cancellation_fees": fees_total,
+            "platform_revenue": round(commission + fees_total, 2)
+        },
+        "by_facility": sorted(by_facility.values(), key=lambda x: -x["gross"]),
+        "by_region": sorted(by_region.values(), key=lambda x: -x["gross"]),
+        "currency": "CAD"
+    }
+
+@api_router.get("/admin/billing/invoices")
+async def admin_billing_invoices(month: Optional[str] = None, admin: dict = Depends(require_admin)):
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    lines, _, facilities, _ = await _month_financials(month)
+    grouped = {}
+    for l in lines:
+        g = grouped.setdefault(l["facility_id"] or "direct", {"lines": [], "facility_id": l["facility_id"], "name": l["facility_name"]})
+        g["lines"].append(l)
+    invoices = []
+    for g in grouped.values():
+        fac = facilities.get(g["facility_id"]) or {}
+        subtotal = round(sum(l["facility_charge"] for l in g["lines"]), 2)
+        hst = round(subtotal * HST_RATE, 2)
+        invoices.append({
+            "facility_id": g["facility_id"],
+            "facility_name": g["name"],
+            "billing_email": fac.get("billing_email"),
+            "deliveries": len(g["lines"]),
+            "subtotal": subtotal,
+            "hst": hst,
+            "total": round(subtotal + hst, 2),
+            "commission_earned": round(sum(l["commission"] for l in g["lines"]), 2),
+            "items": sorted(g["lines"], key=lambda l: l["date"] or "")
+        })
+    invoices.sort(key=lambda i: -i["subtotal"])
+    return {"month": month, "invoices": invoices, "hst_rate": HST_RATE, "currency": "CAD"}
+
+@api_router.get("/admin/billing/driver-statements")
+async def admin_billing_driver_statements(month: Optional[str] = None, admin: dict = Depends(require_admin)):
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    lines, cancel_fees, _, users = await _month_financials(month)
+    grouped = {}
+    for l in lines:
+        if not l["driver_id"]:
+            continue
+        g = grouped.setdefault(l["driver_id"], {"lines": [], "fees": []})
+        g["lines"].append(l)
+    for e in cancel_fees:
+        if e.get("driver_id"):
+            grouped.setdefault(e["driver_id"], {"lines": [], "fees": []})["fees"].append(e)
+    statements = []
+    for did, g in grouped.items():
+        u = users.get(did) or {}
+        gross = round(sum(l["driver_gross"] for l in g["lines"]), 2)
+        commission = round(sum(l["commission"] for l in g["lines"]), 2)
+        fees_total = round(sum(float(e.get("amount", 0)) for e in g["fees"]), 2)
+        statements.append({
+            "driver_id": did,
+            "driver_name": u.get("full_name") or "Unknown driver",
+            "email": u.get("email"),
+            "trips": len(g["lines"]),
+            "gross": gross,
+            "commission": commission,
+            "cancellation_fees": fees_total,
+            "net_payable": round(gross - commission - fees_total, 2),
+            "items": sorted(g["lines"], key=lambda l: l["date"] or ""),
+            "fee_items": g["fees"]
+        })
+    statements.sort(key=lambda s: -s["gross"])
+    return {"month": month, "statements": statements, "currency": "CAD"}
+
+@api_router.get("/admin/billing/export")
+async def admin_billing_export(request: Request, month: Optional[str] = None, report: str = "revenue", auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if report not in ("revenue", "invoices", "driver_statements", "jobs"):
+        raise HTTPException(status_code=422, detail="report must be one of: revenue, invoices, driver_statements, jobs")
+    month = month or datetime.now(timezone.utc).strftime("%Y-%m")
+    import io, csv
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    if report == "invoices":
+        data = await admin_billing_invoices(month, current_user)
+        w.writerow(["MediTrans Ontario — Facility Invoices", month])
+        w.writerow(["Facility", "Billing Email", "Deliveries", "Subtotal (CAD)", "HST 13% (CAD)", "Invoice Total (CAD)", "Commission Earned (CAD)"])
+        for i in data["invoices"]:
+            w.writerow([i["facility_name"], i["billing_email"] or "", i["deliveries"], f"{i['subtotal']:.2f}", f"{i['hst']:.2f}", f"{i['total']:.2f}", f"{i['commission_earned']:.2f}"])
+    elif report == "driver_statements":
+        data = await admin_billing_driver_statements(month, current_user)
+        w.writerow(["MediTrans Ontario — Driver Earnings Statements", month])
+        w.writerow(["Driver", "Email", "Trips", "Gross (CAD)", "Commission (CAD)", "Cancellation Fees (CAD)", "Net Payable (CAD)"])
+        for s in data["statements"]:
+            w.writerow([s["driver_name"], s["email"] or "", s["trips"], f"{s['gross']:.2f}", f"{s['commission']:.2f}", f"{s['cancellation_fees']:.2f}", f"{s['net_payable']:.2f}"])
+    elif report == "jobs":
+        lines, _, _, _ = await _month_financials(month)
+        w.writerow(["MediTrans Ontario — Per-Job Breakdown", month])
+        w.writerow(["Date", "Job ID", "Delivery", "Facility", "Driver", "Region", "Facility Charge (CAD)", "Commission Rate", "Commission (CAD)", "Driver Net (CAD)"])
+        for l in sorted(lines, key=lambda x: x["date"] or ""):
+            w.writerow([(l["date"] or "")[:16].replace("T", " "), l["job_id"], l["title"], l["facility_name"], l["driver_name"] or "", l["region"],
+                        f"{l['facility_charge']:.2f}", f"{l['commission_rate']*100:.0f}%", f"{l['commission']:.2f}", f"{l['driver_net']:.2f}"])
+    else:
+        data = await admin_billing_summary(month, current_user)
+        k = data["kpis"]
+        w.writerow(["MediTrans Ontario — Platform Revenue Summary", month])
+        w.writerow(["Completed Trips", "Gross Delivery Value (CAD)", "Commission Earned (CAD)", "Cancellation Fees (CAD)", "Platform Revenue (CAD)"])
+        w.writerow([k["completed_trips"], f"{k['gross_delivery_value']:.2f}", f"{k['commission_earned']:.2f}", f"{k['cancellation_fees']:.2f}", f"{k['platform_revenue']:.2f}"])
+        w.writerow([])
+        w.writerow(["Revenue by Facility"])
+        w.writerow(["Facility", "Trips", "Gross (CAD)", "Commission (CAD)"])
+        for f in data["by_facility"]:
+            w.writerow([f["name"], f["trips"], f"{f['gross']:.2f}", f"{f['commission']:.2f}"])
+        w.writerow([])
+        w.writerow(["Revenue by Region"])
+        w.writerow(["Region", "Trips", "Gross (CAD)", "Commission (CAD)"])
+        for r in data["by_region"]:
+            w.writerow([r["region"], r["trips"], f"{r['gross']:.2f}", f"{r['commission']:.2f}"])
+    fname = f"meditrans-{report}-{month}.csv"
+    return Response(content=buf.getvalue(), media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={fname}"})
 
 @api_router.get("/dispatch/board")
 async def dispatch_board(staff: dict = Depends(require_staff)):

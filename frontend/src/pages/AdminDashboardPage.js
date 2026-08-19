@@ -29,6 +29,7 @@ import {
 import { toast } from 'sonner';
 import { DriverVerificationTab } from '../components/DriverVerificationTab';
 import { FacilityManagementTab } from '../components/FacilityManagementTab';
+import { AdminRevenueTab } from '../components/AdminRevenueTab';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -280,6 +281,7 @@ const AdminDashboardPage = () => {
             <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-2" />Users</TabsTrigger>
             <TabsTrigger value="drivers" data-testid="tab-drivers"><ShieldCheck className="w-4 h-4 mr-2" />Drivers</TabsTrigger>
             <TabsTrigger value="facilities" data-testid="tab-facilities"><Truck className="w-4 h-4 mr-2" />Facilities</TabsTrigger>
+            <TabsTrigger value="revenue" data-testid="tab-revenue"><TrendingUp className="w-4 h-4 mr-2" />Revenue</TabsTrigger>
             <TabsTrigger value="jobs" data-testid="tab-jobs"><Briefcase className="w-4 h-4 mr-2" />Jobs</TabsTrigger>
             <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees & Commission</TabsTrigger>
             <TabsTrigger value="permits" data-testid="tab-permits"><FileText className="w-4 h-4 mr-2" />Permits</TabsTrigger>
@@ -353,6 +355,10 @@ const AdminDashboardPage = () => {
 
           <TabsContent value="facilities">
             <FacilityManagementTab />
+          </TabsContent>
+
+          <TabsContent value="revenue">
+            <AdminRevenueTab />
           </TabsContent>
 
           <TabsContent value="jobs">
