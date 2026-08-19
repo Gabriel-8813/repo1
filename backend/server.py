@@ -1534,8 +1534,8 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("status") not in ("accepted", "in_progress", "picked_up", "in_transit"):
-        raise HTTPException(status_code=400, detail="Only active jobs can be cancelled")
+    if job.get("status") not in ("accepted", "in_progress"):
+        raise HTTPException(status_code=400, detail="This job can no longer be cancelled — after pickup the item must be delivered or returned to the facility")
     if job.get("accepted_by") != current_user["id"]:
         raise HTTPException(status_code=403, detail="Only the assigned driver can cancel this job")
     

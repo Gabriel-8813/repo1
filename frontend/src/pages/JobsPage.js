@@ -411,6 +411,7 @@ const JobsPage = () => {
                               <div className="flex items-center justify-between gap-3 flex-wrap">
                                 <p className="font-archivo font-bold text-2xl text-slate-900">${Number(payout).toFixed(2)}</p>
                                 <div className="flex gap-2">
+                                  {['accepted', 'in_progress'].includes(job.status) && (
                                   <AlertDialog>
                                     <AlertDialogTrigger asChild>
                                       <Button variant="outline" className="h-11 rounded-full text-red-600 border-red-200 hover:bg-red-50" data-testid={`cancel-job-${job.id}-btn`}>
@@ -435,6 +436,7 @@ const JobsPage = () => {
                                       </AlertDialogFooter>
                                     </AlertDialogContent>
                                   </AlertDialog>
+                                  )}
                                   <Button
                                     className="h-11 bg-blue-600 hover:bg-blue-700 rounded-full"
                                     onClick={() => navigate(`/delivery/${job.id}`)}
