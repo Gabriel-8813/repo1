@@ -1,0 +1,42 @@
+{
+  "summary": "Iteration 16 — Admin Driver Management (enriched verifications API, suspended status, audit trail, compliance blocking, active-delivery exception) tested end to end. Backend: new pytest suite /app/backend/tests/test_driver_management.py (14 tests, 13 pass; the 1 failure is an intentional assertion documenting a real API gap). Regression: test_dispatch_console + test_dispatch_offer_semantics + test_driver_available_jobs = 32/32 green. Frontend: admin -> /admin -> Drivers tab table, credential chips, rating/trips, insurance flags with red/amber row tints, review dialog (compliance box, documents grid, view/approve/reject, reject-notes dialog), Suspend -> solid red 'suspended' badge in table+dialog with dialog staying open and refreshing. Dispatcher board, driver1 /jobs and newdriver /onboarding regressions all pass.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "PUT /api/admin/driver-verifications/{user_id}", "issue": "Re-approving is impossible from the Admin UI for any driver whose required docs are not all uploaded/approved. Suspending seeded driver1 (only 'drivers_licence' uploaded, pending) leaves the admin stuck: clicking Approve returns 400 'Cannot approve driver — missing or rejected required documents: ...' (verified in UI toast + API). Restoration only works via admin PUT /api/drivers/{id}/record, which the UI never calls. Suggest allowing a restore when the previous status was 'approved' (or when the record's credential fields are already valid), or surfacing an explicit override."},
+      {"endpoint": "PUT /api/drivers/{user_id}/record", "issue": "insurance_expiry (and any other field) can never be cleared: updates are built with `{k: v for ... if v is not None}`, so sending {\"insurance_expiry\": null} is silently a no-op and returns 200. A wrong/expired expiry date entered by staff can only be overwritten with another date, never removed. Same silent-no-op applies to every nullable field."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": []
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_driver_management.py",
+    "/app/test_reports/pytest/driver_mgmt.xml"
+  ],
+  "action_items": [
+    "Allow an admin to restore a suspended/rejected driver to 'approved' without re-uploading documents when the driver was previously approved (or expose the override in the Drivers dialog) — currently Approve in the review dialog fails with 400 for driver1.",
+    "Allow clearing nullable driver-record fields (e.g. insurance_expiry) in PUT /api/drivers/{user_id}/record instead of silently dropping null values.",
+    "Pre-existing (unchanged): no brute-force lockout on /api/auth/login (test_auth_hardening::test_brute_force_lockout_after_5_failures still fails), CORS allow_origins='*' with allow_credentials=True, no httpOnly auth cookie (Bearer token in localStorage)."
+  ],
+  "critical_code_review_comments": [
+    "server.py is 3151 lines — split into routers (jobs, drivers/verification, dispatch, billing) per the 700-line guideline.",
+    "is_driver_verified() reads only verification_status + insurance_expiry, which correctly keeps the gate cheap; verified it is applied on POST /jobs/{id}/accept and on PUT /jobs/{id} for both assigned_driver_id and target_driver, and intentionally NOT on status advancement — behaviour matches the 'active deliveries not interrupted' requirement.",
+    "dispatch_board first filters verification_status=='approved' then re-runs driver_compliance_issues — the pre-filter makes the insurance check the only effective part; harmless but redundant."
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_driver_management.py",
+    "/app/test_reports/fe_state.py",
+    "/app/test_reports/restore_driver1.py",
+    "/app/test_reports/cleanup_jobs.py"
+  ],
+  "success_rate": {"backend": "93% (13/14; the single failure is an intentional assertion documenting the null-field gap)", "frontend": "100%"},
+  "seed_data_creation": "Created and deleted TEST_QA drivermgmt jobs (all removed via admin DELETE /api/jobs/{id}; verified 0 leftovers). Temporarily set driver1 insurance_expiry to 2025-01-01 / +15d and newdriver to +15d for the flag/tint tests. NOTE: two 'TEST_QA Transport' jobs (open + accepted) predate this iteration and were left untouched.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md — all 5 accounts verified working (login token key 'access_token').",
+  "context_for_next_testing_agent": "driver1 was restored to verification_status='approved' but its insurance_expiry could NOT be reset to null (API strips nulls) — it is now '2027-08-19' (insurance_flag=null, compliant=true), which is functionally equivalent for all suites. newdriver is back to verification_status='incomplete' with insurance_expiry '2027-08-19'. Helper scripts: /app/test_reports/fe_state.py setup|teardown creates/reverts expired+expiring_soon insurance states for frontend flag testing; /app/test_reports/restore_driver1.py force-restores driver1 to approved via PUT /api/drivers/{id}/record (needed because the admin verification endpoint blocks approval on missing docs). Verified backend behaviour: audit entries land in GET /api/audit-logs?entity=driver_verification&entity_id=... with details {from,to} for both PUT endpoints and none for non-status field edits; suspended/expired-insurance drivers get 403 on accept ('not currently eligible'), 400 on dispatcher assign, and vanish from dispatch board approved_drivers; expiring_soon stays compliant and assignable; a suspended driver can still advance picked_up -> in_transit -> delivered and post custody events.",
+  "rca_of_the_issue": "Both minor issues are in the update paths, not the new compliance logic. (1) update_driver_verification always runs the required-document blocker for target status 'approved' regardless of the driver's previous status, so a suspend action taken from the new Drivers tab is irreversible from that same UI for legacy/seeded drivers with incomplete document sets. (2) update_driver_record filters out None values before $set, so nullable fields are write-once-then-permanent."
+}

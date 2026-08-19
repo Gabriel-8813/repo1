@@ -302,7 +302,7 @@ ITEM_CATEGORIES = {"prescription", "lab_sample", "biological", "medical_equipmen
 HANDLING_FLAGS = {"cold_chain", "controlled_substance", "fragile", "urgent", "signature_required", "id_required"}
 # "open"/"completed" kept as legacy aliases of "created"/"delivered"
 JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed", "in_progress"}
-DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected"}
+DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected", "suspended"}
 COMPLIANCE_STATUSES = {"not_submitted", "pending", "valid", "expired", "rejected"}
 CUSTODY_EVENT_TYPES = {"pickup_confirmed", "in_transit_ping", "delivery_attempted", "delivered", "returned", "exception"}
 
@@ -479,9 +479,9 @@ def address_area(address: Optional[str], city: Optional[str] = None) -> str:
     locality = city or (parts[1] if len(parts) > 1 else "")
     return f"{street}, {locality}" if locality and locality.lower() != street.lower() else street
 
-async def log_audit(actor: dict, action: str, entity: str, entity_id: str):
+async def log_audit(actor: dict, action: str, entity: str, entity_id: str, details: Optional[dict] = None):
     try:
-        await db.audit_logs.insert_one({
+        entry = {
             "id": str(uuid.uuid4()),
             "actor_id": actor["id"],
             "actor_role": actor.get("role"),
@@ -489,13 +489,41 @@ async def log_audit(actor: dict, action: str, entity: str, entity_id: str):
             "entity": entity,
             "entity_id": entity_id,
             "timestamp": datetime.now(timezone.utc).isoformat()
-        })
+        }
+        if details:
+            entry["details"] = details
+        await db.audit_logs.insert_one(entry)
     except Exception as e:
         logging.getLogger(__name__).error(f"Audit log write failed: {e}")
 
+def insurance_flag_of(insurance_expiry: Optional[str]) -> Optional[str]:
+    """Returns 'expired', 'expiring_soon' (<=30 days) or None."""
+    if not insurance_expiry:
+        return None
+    try:
+        expiry = datetime.fromisoformat(insurance_expiry[:10]).date()
+    except ValueError:
+        return None
+    today = datetime.now(timezone.utc).date()
+    if expiry < today:
+        return "expired"
+    if (expiry - today).days <= 30:
+        return "expiring_soon"
+    return None
+
+def driver_compliance_issues(rec: dict) -> list:
+    issues = []
+    status = rec.get("verification_status", "incomplete")
+    if status != "approved":
+        issues.append(f"verification {status}")
+    if insurance_flag_of(rec.get("insurance_expiry")) == "expired":
+        issues.append("insurance expired")
+    return issues
+
 async def is_driver_verified(user_id: str) -> bool:
-    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0, "verification_status": 1})
-    return bool(rec and rec.get("verification_status") == "approved")
+    """Compliance gate for NEW work (offers/assignments/accepts). Active deliveries are not re-checked."""
+    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0, "verification_status": 1, "insurance_expiry": 1})
+    return bool(rec) and not driver_compliance_issues(rec)
 
 async def facility_ids_owned_by(user_id: str) -> list:
     return [f["id"] async for f in db.facilities.find({"owner_user_id": user_id}, {"_id": 0, "id": 1})]
@@ -1575,7 +1603,7 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     if role not in ("driver", "admin"):
         raise HTTPException(status_code=403, detail="Only drivers can accept jobs")
     if role == "driver" and not await is_driver_verified(current_user["id"]):
-        raise HTTPException(status_code=403, detail="Your driver verification is not approved yet. Complete verification before accepting jobs.")
+        raise HTTPException(status_code=403, detail="You are not currently eligible for new jobs — check your verification status and insurance expiry.")
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -2067,15 +2095,20 @@ async def update_driver_record(user_id: str, payload: DriverRecordUpdate, curren
     if current_user["id"] != user_id and not is_admin:
         raise HTTPException(status_code=403, detail="Not authorized")
     validate_driver_fields(payload)
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    clearable = {"vehicle_type", "vehicle_plate", "insurance_expiry"}
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in clearable}
     if not is_admin:
         for f in ("verification_status", "rating_avg", "total_trips"):
             updates.pop(f, None)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    prev = await db.drivers.find_one({"user_id": user_id}, {"_id": 0, "verification_status": 1})
     result = await db.drivers.update_one({"user_id": user_id}, {"$set": updates})
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="Driver record not found")
+    if "verification_status" in updates and prev and updates["verification_status"] != prev.get("verification_status"):
+        await log_audit(current_user, "update", "driver_verification", user_id,
+                        details={"from": prev.get("verification_status"), "to": updates["verification_status"]})
     return await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
 
 @api_router.delete("/drivers/{user_id}/record")
@@ -2187,12 +2220,12 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
     new_status = updates.get("status")
     target_driver = updates.get("assigned_driver_id") or job.get("assigned_driver_id") or job.get("accepted_by")
     if updates.get("assigned_driver_id") and not await is_driver_verified(updates["assigned_driver_id"]):
-        raise HTTPException(status_code=400, detail="Cannot assign job: driver verification is not approved")
+        raise HTTPException(status_code=400, detail="Cannot assign job: driver is not compliant (verification not approved, suspended, or insurance expired)")
     if new_status in ("offered", "accepted") and role != "driver":
         if not target_driver:
             raise HTTPException(status_code=400, detail="Assign a driver before offering the job")
         if not await is_driver_verified(target_driver):
-            raise HTTPException(status_code=400, detail="Cannot offer job: driver verification is not approved")
+            raise HTTPException(status_code=400, detail="Cannot offer job: driver is not compliant (verification not approved, suspended, or insurance expired)")
     if "dropoff_address" in updates:
         updates["delivery_address"] = updates["dropoff_address"]
     if "payout_amount" in updates:
@@ -2650,12 +2683,19 @@ async def list_driver_verifications(staff: dict = Depends(require_staff)):
     docs_by_user = {}
     for d in docs:
         docs_by_user.setdefault(d["user_id"], {})[d["doc_type"]] = d
+    rating_pipeline = [
+        {"$match": {"driver_id": {"$in": user_ids}, "hidden": {"$ne": True}}},
+        {"$group": {"_id": "$driver_id", "avg": {"$avg": "$rating"}, "count": {"$sum": 1}}}
+    ]
+    ratings = {r["_id"]: r async for r in db.reviews.aggregate(rating_pipeline)}
     out = []
     for rec in records:
         u = users_by_id.get(rec["user_id"])
         if not u:
             continue
         checklist, required_submitted = build_checklist(docs_by_user.get(rec["user_id"], {}), rec)
+        rating = ratings.get(rec["user_id"])
+        issues = driver_compliance_issues(rec)
         out.append({
             "user_id": rec["user_id"],
             "full_name": u.get("full_name"),
@@ -2664,7 +2704,17 @@ async def list_driver_verifications(staff: dict = Depends(require_staff)):
             "verification_status": rec.get("verification_status", "incomplete"),
             "cold_chain_certified": rec.get("cold_chain_certified", False),
             "vehicle_plate": rec.get("vehicle_plate"),
+            "cvor_status": rec.get("cvor_status", "not_submitted"),
+            "tdg_cert_status": rec.get("tdg_cert_status", "not_submitted"),
+            "vulnerable_sector_check_status": rec.get("vulnerable_sector_check_status", "not_submitted"),
+            "insurance_status": rec.get("insurance_status", "not_submitted"),
             "insurance_expiry": rec.get("insurance_expiry"),
+            "insurance_flag": insurance_flag_of(rec.get("insurance_expiry")),
+            "rating_avg": round(rating["avg"], 2) if rating else rec.get("rating_avg", 0.0),
+            "rating_count": rating["count"] if rating else 0,
+            "total_trips": rec.get("total_trips", 0),
+            "compliant": not issues,
+            "compliance_issues": issues,
             "all_required_submitted": required_submitted,
             "checklist": checklist
         })
@@ -2700,7 +2750,7 @@ async def update_driver_verification(user_id: str, payload: VerificationUpdate, 
     rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
     if not rec:
         raise HTTPException(status_code=404, detail="Driver record not found")
-    if payload.verification_status == "approved":
+    if payload.verification_status == "approved" and rec.get("verification_status") != "suspended":
         docs = await db.driver_documents.find({"user_id": user_id, "is_deleted": False}, {"_id": 0}).to_list(50)
         docs_by_type = {d["doc_type"]: d for d in docs}
         blockers = [
@@ -2710,7 +2760,8 @@ async def update_driver_verification(user_id: str, payload: VerificationUpdate, 
         if blockers:
             raise HTTPException(status_code=400, detail=f"Cannot approve driver — missing or rejected required documents: {', '.join(blockers)}")
     result = await db.drivers.update_one({"user_id": user_id}, {"$set": {"verification_status": payload.verification_status}})
-    await log_audit(staff, "update", "driver_verification", user_id)
+    await log_audit(staff, "update", "driver_verification", user_id,
+                    details={"from": rec.get("verification_status"), "to": payload.verification_status})
     rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
     return rec
 
@@ -3014,8 +3065,8 @@ async def dispatch_board(staff: dict = Depends(require_staff)):
             j.get("offered_at") if j["status"] == "offered" else
             j.get("created_at")
         ) or j.get("created_at")
-    recs = await db.drivers.find({"verification_status": "approved"}, {"_id": 0, "user_id": 1}).to_list(200)
-    duids = [r["user_id"] for r in recs]
+    recs = await db.drivers.find({"verification_status": "approved"}, {"_id": 0, "user_id": 1, "verification_status": 1, "insurance_expiry": 1}).to_list(200)
+    duids = [r["user_id"] for r in recs if not driver_compliance_issues(r)]
     dnames = {u["id"]: u["full_name"] async for u in db.users.find({"id": {"$in": duids}, "role": "driver"}, {"_id": 0, "id": 1, "full_name": 1})}
     approved_drivers = [{"user_id": uid, "name": dnames[uid]} for uid in duids if uid in dnames]
     return {"jobs": jobs, "approved_drivers": approved_drivers}
