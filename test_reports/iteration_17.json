@@ -1,0 +1,36 @@
+{
+  "summary": "Iteration 17: Full backend + frontend testing of Admin Facility Management (Facilities tab, status approve/suspend, per-facility pricing terms, commission override, audit, suspend booking block). Created /app/backend/tests/test_facility_management.py (20 pytest cases) - all 20 pass. Regression suites test_facility_portal.py + test_dispatch_console.py re-run green (24/24). Playwright UI tests on /admin Facilities tab (table, volume, terms chips, suspend/approve toggle, edit dialog set/clear terms) all passed with no console errors; facility1 portal Book Transport and dispatcher Kanban board render correctly.",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin > Facilities > Terms chip", "issues": ["Flat-rate chip renders as '$ 37.50/delivery' with a gap: DollarSign icon lacks the mr-0.5 spacing class used on the Percent chip - inconsistent icon spacing (cosmetic)"]},
+      {"screen": "Facility Portal > Book Transport", "issues": ["'Requested pickup time' uses the browser-native datetime-local picker (mm/dd/yyyy, --:--) instead of a shadcn calendar/time control - pre-existing, not part of this feature"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_facility_management.py",
+    "/app/test_reports/pytest/it17_facility_mgmt.xml",
+    "/app/test_reports/check_state17.py"
+  ],
+  "action_items": [
+    "Optional cosmetic: add mr-0.5 to the DollarSign icon in the terms-rate chip (FacilityManagementTab.jsx) for consistent spacing"
+  ],
+  "critical_code_review_comments": [
+    "PUT /api/facilities/{id}: non-admin admin-only fields are silently dropped; if the owner sends ONLY status/pricing fields the request 400s with 'No fields to update' which is a confusing message for an ignored-field case (verified behaviour, low risk).",
+    "Commission override is only applied in settle_job_completion (POST /jobs/{id}/complete and custody-event 'delivered'). A driver PUT /api/jobs/{id} with status='delivered' marks the job delivered WITHOUT creating any commission ledger entry - pre-existing gap that lets deliveries settle with zero commission; consider routing PUT delivered/completed through settle_job_completion.",
+    "server.py is 3207 lines - consider splitting into routers (facilities, jobs, admin, dispatch) per file-size guideline."
+  ],
+  "updated_files": ["/app/backend/tests/test_facility_management.py", "/app/test_reports/check_state17.py"],
+  "success_rate": {"backend": "100% (20/20 new + 24/24 regression)", "frontend": "100% (all tested flows)"},
+  "seed_data_creation": "Temporary TEST_ facility requests booked against LifeLabs Queen West for pricing/commission checks; all deleted. LifeLabs Queen West restored to status=approved, per_delivery_rate=null, commission_rate_override=null (verified). driver1 untouched/approved.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md (admin gabrielosmanhamza@yahoo.com/Admin@123, facility1@test.com/Facility@123, driver1@test.com/Driver@123, dispatcher1@test.com/Dispatch@123)",
+  "context_for_next_testing_agent": "Verified: GET /api/admin/facilities (staff only; driver+facility 403, dispatcher 200) with owner+volume enrichment and no _id; PUT /api/facilities/{id} admin sets/clears per_delivery_rate & commission_rate_override (explicit null clears), 422 on commission>1 and negative rate, 404 on unknown id; owner PUT edits contact fields but status/pricing silently ignored; audit logs contain {field:{from,to}} for status and pricing; suspended facility booking -> 403 'suspended' while in-flight job still advanced to picked_up; flat rate 40 -> payout 40.00, urgent 60.00, cold_chain 55.00, cleared rate reverts to max($25, $1.50/km); commission override 0.10 produced ledger entry 10% with description '10% platform commission', no-override job used 20%. IMPORTANT for delivery cycles: use POST /api/jobs/{id}/custody-events (pickup_confirmed with checklist, then delivered with recipient_name + evidence_url) - PUT status=delivered does NOT create ledger entries. facility/requests requires requested_pickup_time and item_category from {prescription, lab_sample, biological, medical_equipment, medical_supply, other}.",
+  "rca_of_the_issue": "No product defects found. Initial test failures were test-side payload errors (missing requested_pickup_time, wrong item_category 'lab_specimen', nonexistent /api/admin/drivers endpoint) - fixed in the test file."
+}

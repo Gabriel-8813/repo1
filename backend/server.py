@@ -363,6 +363,8 @@ class FacilityUpdate(BaseModel):
     contact_phone: Optional[str] = None
     billing_email: Optional[EmailStr] = None
     status: Optional[str] = None
+    per_delivery_rate: Optional[float] = Field(default=None, ge=0)
+    commission_rate_override: Optional[float] = Field(default=None, ge=0, le=1)
 
 class JobUpdate(BaseModel):
     title: Optional[str] = None
@@ -1749,6 +1751,10 @@ async def settle_job_completion(job: dict, driver_id: str, final_status: str = "
     # Record platform commission as owed ledger entry
     fees = await get_fees_from_db()
     commission_rate = float(fees.get("commission_rate", 0.20))
+    if job.get("facility_id"):
+        fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "commission_rate_override": 1})
+        if fac and fac.get("commission_rate_override") is not None:
+            commission_rate = float(fac["commission_rate_override"])
     commission_amount = round(gross * commission_rate, 2)
     ledger_entry = {
         "id": str(uuid.uuid4()),
@@ -1758,7 +1764,7 @@ async def settle_job_completion(job: dict, driver_id: str, final_status: str = "
         "amount": commission_amount,
         "status": "owed",
         "currency": "CAD",
-        "description": f"{int(commission_rate * 100)}% platform commission on trip ${gross:.2f}",
+        "description": f"{commission_rate * 100:.0f}% platform commission on trip ${gross:.2f}",
         "created_at": now.isoformat()
     }
     await db.ledger.insert_one(ledger_entry)
@@ -2161,10 +2167,18 @@ async def update_facility(facility_id: str, payload: FacilityUpdate, current_use
         raise HTTPException(status_code=403, detail="Not authorized")
     validate_enum(payload.type, FACILITY_TYPES, "type")
     validate_enum(payload.status, USER_STATUSES, "status")
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    is_admin = current_user.get("role") == "admin"
+    clearable = {"per_delivery_rate", "commission_rate_override"}
+    updates = {k: v for k, v in payload.model_dump(exclude_unset=True).items() if v is not None or k in clearable}
+    if not is_admin:
+        for f in ("status", "per_delivery_rate", "commission_rate_override"):
+            updates.pop(f, None)
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    changed = {k: {"from": facility.get(k), "to": v} for k, v in updates.items() if facility.get(k) != v}
     await db.facilities.update_one({"id": facility_id}, {"$set": updates})
+    if changed:
+        await log_audit(current_user, "update", "facility", facility_id, details=changed)
     return await db.facilities.find_one({"id": facility_id}, {"_id": 0})
 
 @api_router.delete("/facilities/{facility_id}")
@@ -2838,12 +2852,17 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
         facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0})
         if not facility:
             raise HTTPException(status_code=400, detail="Set up your facility profile before booking transport")
+    if facility.get("status") == "suspended":
+        raise HTTPException(status_code=403, detail="This facility is suspended and cannot book new transports. Contact the administrator.")
 
     pickup = payload.pickup_address or facility.get("address")
     distance = await estimate_distance_km(pickup, payload.dropoff_address)
     fees = await get_fees_from_db()
     billed_km = distance if distance is not None else 10.0
-    payout = max(float(fees.get("minimum_fee", 25.0)), float(fees.get("base_rate_per_km", 1.5)) * billed_km)
+    if facility.get("per_delivery_rate") is not None:
+        payout = float(facility["per_delivery_rate"])
+    else:
+        payout = max(float(fees.get("minimum_fee", 25.0)), float(fees.get("base_rate_per_km", 1.5)) * billed_km)
     if "urgent" in payload.handling_flags:
         payout *= float(fees.get("urgent_multiplier", 1.5))
     if "cold_chain" in payload.handling_flags:
@@ -3045,6 +3064,43 @@ async def facility_billing_export(request: Request, month: Optional[str] = None,
         return Response(content=pdf_bytes, media_type="application/pdf",
                         headers={"Content-Disposition": f"attachment; filename={fname}.pdf"})
     raise HTTPException(status_code=422, detail="format must be csv or pdf")
+
+# ---- Admin: Facility Management ----
+@api_router.get("/admin/facilities")
+async def admin_list_facilities(staff: dict = Depends(require_staff)):
+    facilities = await db.facilities.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    fac_ids = [f["id"] for f in facilities]
+    owner_ids = list({f.get("owner_user_id") for f in facilities if f.get("owner_user_id")})
+    owners = {u["id"]: u async for u in db.users.find({"id": {"$in": owner_ids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1, "phone": 1})}
+    cutoff_30d = (datetime.now(timezone.utc) - timedelta(days=30)).isoformat()
+    pipeline = [
+        {"$match": {"facility_id": {"$in": fac_ids}}},
+        {"$group": {
+            "_id": "$facility_id",
+            "total_jobs": {"$sum": 1},
+            "delivered_jobs": {"$sum": {"$cond": [{"$in": ["$status", ["delivered", "completed"]]}, 1, 0]}},
+            "last_30d_jobs": {"$sum": {"$cond": [{"$gte": ["$created_at", cutoff_30d]}, 1, 0]}},
+            "total_billed": {"$sum": {"$cond": [
+                {"$in": ["$status", ["delivered", "completed"]]},
+                {"$ifNull": ["$payout_amount", {"$ifNull": ["$offered_price", 0]}]}, 0]}}
+        }}
+    ]
+    volumes = {v["_id"]: v async for v in db.jobs.aggregate(pipeline)}
+    out = []
+    for f in facilities:
+        v = volumes.get(f["id"], {})
+        owner = owners.get(f.get("owner_user_id"))
+        out.append({
+            **f,
+            "owner": {"full_name": owner.get("full_name"), "email": owner.get("email"), "phone": owner.get("phone")} if owner else None,
+            "volume": {
+                "total_jobs": v.get("total_jobs", 0),
+                "delivered_jobs": v.get("delivered_jobs", 0),
+                "last_30d_jobs": v.get("last_30d_jobs", 0),
+                "total_billed": round(v.get("total_billed", 0), 2)
+            }
+        })
+    return {"facilities": out}
 
 @api_router.get("/dispatch/board")
 async def dispatch_board(staff: dict = Depends(require_staff)):

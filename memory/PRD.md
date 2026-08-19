@@ -212,6 +212,13 @@ Build an app for medical transportation that people can register and pay a month
 - **Frontend Drivers tab** rewritten as a table: credential chips, rating, trips, status badges, red/amber row tints for insurance flags, review dialog with document approve/reject + Approve/Reject/Suspend/Move-back actions
 - Tested: iteration 16 (backend 14/14 after fixes, frontend 100%) + regressions green
 
+### Admin Facility Management (June 2026)
+- **GET /api/admin/facilities** (staff): facilities + owner contact + volume stats (total/delivered/30d jobs, total billed)
+- **PUT /api/facilities/{id}**: admin-only status + pricing fields (per_delivery_rate flat CAD, commission_rate_override 0-1, explicit null clears); owner edits limited to details; all changes audited with per-field {from,to}
+- **Pricing engine**: flat per-delivery rate replaces distance calc (urgent ×1.5 / cold-chain +$15 still apply); commission override used in delivery-completion ledger; suspended facilities blocked from new bookings (403), in-flight jobs unaffected
+- **Frontend Facilities tab** in /admin: table with type/contact/volume/terms chips/status, Approve/Suspend quick actions, Edit dialog with pricing terms
+- Tested: iteration 17 — 20/20 new backend tests + 24/24 regression + all frontend flows green
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
