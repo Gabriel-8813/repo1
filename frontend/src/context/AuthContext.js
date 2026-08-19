@@ -84,6 +84,15 @@ export const AuthProvider = ({ children }) => {
   );
 };
 
+export const roleHome = (user) => {
+  switch (user?.role) {
+    case 'admin': return '/admin';
+    case 'facility': return '/facility';
+    case 'dispatcher': return '/dispatch';
+    default: return '/dashboard';
+  }
+};
+
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

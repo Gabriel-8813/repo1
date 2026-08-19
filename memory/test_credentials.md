@@ -12,3 +12,22 @@ Notes: Any user created with the email in `ADMIN_EMAIL` (backend/.env) is auto-p
 - Email: `driver1@test.com`
 - Password: `Driver@123`
 - Role: `driver`
+- Has an approved driver record in `db.drivers` (verification_status=approved) so it CAN accept jobs.
+- Home: `/dashboard`
+
+## Facility (test user)
+- Email: `facility1@test.com`
+- Password: `Facility@123`
+- Role: `facility`
+- Home: `/facility` (placeholder shell)
+
+## Dispatcher (test user)
+- Email: `dispatcher1@test.com`
+- Password: `Dispatch@123`
+- Role: `dispatcher`
+- Home: `/dispatch` (placeholder shell)
+
+## RBAC notes
+- Drivers with no approved driver record (verification_status != approved) get 403 on `POST /api/jobs/{id}/accept` and cannot be assigned via `PUT /api/jobs/{id}`.
+- Drivers cannot `POST /api/jobs` (403). Facilities/dispatchers/admins can.
+- `GET /api/audit-logs` requires admin or dispatcher role.

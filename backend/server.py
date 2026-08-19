@@ -298,7 +298,7 @@ FACILITY_TYPES = {"pharmacy", "clinic", "lab", "hospital", "health_shop", "other
 ITEM_CATEGORIES = {"prescription", "lab_sample", "biological", "medical_equipment", "medical_supply", "other"}
 HANDLING_FLAGS = {"cold_chain", "controlled_substance", "fragile", "urgent", "signature_required", "id_required"}
 # "open"/"completed" kept as legacy aliases of "created"/"delivered"
-JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed"}
+JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed", "in_progress"}
 DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected"}
 COMPLIANCE_STATUSES = {"not_submitted", "pending", "valid", "expired", "rejected"}
 
@@ -421,6 +421,54 @@ async def require_admin(current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Admin access required")
     return current_user
+
+# ---- RBAC helpers ----
+STAFF_ROLES = {"admin", "dispatcher"}
+
+async def require_staff(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Dispatcher or admin access required")
+    return current_user
+
+DRIVER_JOB_FIELDS = {
+    "id", "title", "pickup_address", "delivery_address", "dropoff_address",
+    "pickup_city", "delivery_city", "goods_type", "temperature_controlled",
+    "urgency", "estimated_distance_km", "distance_km", "offered_price",
+    "payout_amount", "notes", "special_instructions", "item_category",
+    "handling_flags", "status", "created_at", "accepted_at", "picked_up_at",
+    "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id"
+}
+
+def scoped_job(job: dict, user: dict) -> dict:
+    if user.get("role") == "driver":
+        return {k: v for k, v in job.items() if k in DRIVER_JOB_FIELDS}
+    return job
+
+async def log_audit(actor: dict, action: str, entity: str, entity_id: str):
+    try:
+        await db.audit_logs.insert_one({
+            "id": str(uuid.uuid4()),
+            "actor_id": actor["id"],
+            "actor_role": actor.get("role"),
+            "action": action,
+            "entity": entity,
+            "entity_id": entity_id,
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        })
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Audit log write failed: {e}")
+
+async def is_driver_verified(user_id: str) -> bool:
+    rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0, "verification_status": 1})
+    return bool(rec and rec.get("verification_status") == "approved")
+
+async def facility_ids_owned_by(user_id: str) -> list:
+    return [f["id"] async for f in db.facilities.find({"owner_user_id": user_id}, {"_id": 0, "id": 1})]
+
+def strip_facility_billing(fac: dict, user: dict) -> dict:
+    if user.get("role") in STAFF_ROLES or fac.get("owner_user_id") == user["id"]:
+        return fac
+    return {k: v for k, v in fac.items() if k != "billing_email"}
 
 # Auth Routes
 @api_router.post("/auth/register", response_model=TokenResponse)
@@ -1197,6 +1245,8 @@ async def create_connect_login_link(current_user: dict = Depends(get_current_use
 # Job Routes
 @api_router.post("/jobs", response_model=JobResponse)
 async def create_job(job: JobCreate, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") == "driver":
+        raise HTTPException(status_code=403, detail="Drivers cannot post jobs")
     data = job.model_dump()
     validate_enum(data.get("item_category"), ITEM_CATEGORIES, "item_category")
     validate_handling_flags(data.get("handling_flags"))
@@ -1233,32 +1283,52 @@ async def create_job(job: JobCreate, current_user: dict = Depends(get_current_us
         "delivered_at": None
     }
     await db.jobs.insert_one(job_doc)
+    await log_audit(current_user, "create", "job", job_id)
     return JobResponse(**job_doc)
 
 @api_router.get("/jobs")
 async def get_jobs(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
-    query = {}
+    role = current_user.get("role")
+    if role in STAFF_ROLES:
+        query = {}
+    elif role == "facility":
+        fac_ids = await facility_ids_owned_by(current_user["id"])
+        query = {"$or": [{"posted_by": current_user["id"]}, {"facility_id": {"$in": fac_ids}}]}
+    else:
+        query = {"$or": [{"status": "open"}, {"accepted_by": current_user["id"]}, {"assigned_driver_id": current_user["id"]}]}
     if status:
-        query["status"] = status
-    
+        query = {"$and": [query, {"status": status}]} if query else {"status": status}
+
     jobs = await db.jobs.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return {"jobs": jobs}
+    await log_audit(current_user, "view", "job", "list")
+    return {"jobs": [scoped_job(j, current_user) for j in jobs]}
 
 @api_router.get("/jobs/available")
 async def get_available_jobs(current_user: dict = Depends(get_current_user)):
-    jobs = await db.jobs.find({"status": "open"}, {"_id": 0}).sort("created_at", -1).to_list(100)
-    return {"jobs": jobs}
+    query = {"status": "open"}
+    if current_user.get("role") == "facility":
+        fac_ids = await facility_ids_owned_by(current_user["id"])
+        query = {"status": "open", "$or": [{"posted_by": current_user["id"]}, {"facility_id": {"$in": fac_ids}}]}
+    jobs = await db.jobs.find(query, {"_id": 0}).sort("created_at", -1).to_list(100)
+    await log_audit(current_user, "view", "job", "list")
+    return {"jobs": [scoped_job(j, current_user) for j in jobs]}
 
 @api_router.get("/jobs/my")
 async def get_my_jobs(current_user: dict = Depends(get_current_user)):
     jobs = await db.jobs.find(
-        {"$or": [{"posted_by": current_user["id"]}, {"accepted_by": current_user["id"]}]},
+        {"$or": [{"posted_by": current_user["id"]}, {"accepted_by": current_user["id"]}, {"assigned_driver_id": current_user["id"]}]},
         {"_id": 0}
     ).sort("created_at", -1).to_list(100)
-    return {"jobs": jobs}
+    await log_audit(current_user, "view", "job", "list")
+    return {"jobs": [scoped_job(j, current_user) for j in jobs]}
 
 @api_router.post("/jobs/{job_id}/accept")
 async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role")
+    if role not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Only drivers can accept jobs")
+    if role == "driver" and not await is_driver_verified(current_user["id"]):
+        raise HTTPException(status_code=403, detail="Your driver verification is not approved yet. Complete verification before accepting jobs.")
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
@@ -1270,12 +1340,13 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
         {"$set": {
             "status": "in_progress",
             "accepted_by": current_user["id"],
+            "assigned_driver_id": current_user["id"],
             "accepted_at": datetime.now(timezone.utc).isoformat()
         }}
     )
-    
+    await log_audit(current_user, "accept", "job", job_id)
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
-    return {"job": updated_job}
+    return {"job": scoped_job(updated_job, current_user)}
 
 @api_router.post("/jobs/{job_id}/cancel")
 async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)):
@@ -1304,11 +1375,13 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
         {"$set": {
             "status": "open",
             "accepted_by": None,
+            "assigned_driver_id": None,
             "accepted_at": None,
             "last_cancelled_by": current_user["id"],
             "last_cancelled_at": now.isoformat()
         }}
     )
+    await log_audit(current_user, "cancel", "job", job_id)
     
     ledger_entry = None
     if charged:
@@ -1350,9 +1423,12 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
         {"id": job_id},
         {"$set": {
             "status": "completed",
-            "completed_at": now.isoformat()
+            "completed_at": now.isoformat(),
+            "delivered_at": now.isoformat()
         }}
     )
+    await log_audit(current_user, "complete", "job", job_id)
+    await db.drivers.update_one({"user_id": current_user["id"]}, {"$inc": {"total_trips": 1}})
     
     # Record gross earnings (what the driver charged the customer)
     gross = float(job["offered_price"])
@@ -1695,7 +1771,7 @@ async def create_driver_record(payload: DriverRecordCreate, current_user: dict =
     return doc
 
 @api_router.get("/drivers")
-async def list_driver_records(verification_status: Optional[str] = None, admin: dict = Depends(require_admin)):
+async def list_driver_records(verification_status: Optional[str] = None, staff: dict = Depends(require_staff)):
     query = {}
     if verification_status:
         query["verification_status"] = verification_status
@@ -1753,19 +1829,21 @@ async def create_facility(payload: FacilityCreate, current_user: dict = Depends(
 @api_router.get("/facilities")
 async def list_facilities(type: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     query = {}
+    if current_user.get("role") == "facility":
+        query["owner_user_id"] = current_user["id"]
     if type:
         query["type"] = type
     if status:
         query["status"] = status
     facilities = await db.facilities.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
-    return {"facilities": facilities}
+    return {"facilities": [strip_facility_billing(f, current_user) for f in facilities]}
 
 @api_router.get("/facilities/{facility_id}")
 async def get_facility(facility_id: str, current_user: dict = Depends(get_current_user)):
     facility = await db.facilities.find_one({"id": facility_id}, {"_id": 0})
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")
-    return facility
+    return strip_facility_billing(facility, current_user)
 
 @api_router.put("/facilities/{facility_id}")
 async def update_facility(facility_id: str, payload: FacilityUpdate, current_user: dict = Depends(get_current_user)):
@@ -1798,24 +1876,49 @@ async def get_job_by_id(job_id: str, current_user: dict = Depends(get_current_us
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return job
+    role = current_user.get("role")
+    if role == "facility":
+        fac_ids = await facility_ids_owned_by(current_user["id"])
+        if job.get("posted_by") != current_user["id"] and job.get("facility_id") not in fac_ids:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    elif role == "driver":
+        if job.get("status") != "open" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+            raise HTTPException(status_code=403, detail="Not authorized")
+    await log_audit(current_user, "view", "job", job_id)
+    return scoped_job(job, current_user)
 
 @api_router.put("/jobs/{job_id}")
 async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depends(get_current_user)):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    is_admin = current_user.get("role") == "admin"
+    role = current_user.get("role")
+    is_staff = role in STAFF_ROLES
     is_poster = job.get("posted_by") == current_user["id"]
+    if role == "facility" and not is_poster:
+        fac_ids = await facility_ids_owned_by(current_user["id"])
+        is_poster = job.get("facility_id") in fac_ids
     is_assigned = current_user["id"] in (job.get("accepted_by"), job.get("assigned_driver_id"))
-    if not (is_admin or is_poster or is_assigned):
+    if not (is_staff or is_poster or is_assigned):
         raise HTTPException(status_code=403, detail="Not authorized")
+    raw_updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if role == "driver" and set(raw_updates.keys()) - {"status"}:
+        raise HTTPException(status_code=403, detail="Drivers can only update job status")
     validate_enum(payload.status, JOB_STATUSES, "status")
     validate_enum(payload.item_category, ITEM_CATEGORIES, "item_category")
     validate_handling_flags(payload.handling_flags)
-    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    updates = raw_updates
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    new_status = updates.get("status")
+    target_driver = updates.get("assigned_driver_id") or job.get("assigned_driver_id") or job.get("accepted_by")
+    if updates.get("assigned_driver_id") and not await is_driver_verified(updates["assigned_driver_id"]):
+        raise HTTPException(status_code=400, detail="Cannot assign job: driver verification is not approved")
+    if new_status in ("offered", "accepted") and role != "driver":
+        if not target_driver:
+            raise HTTPException(status_code=400, detail="Assign a driver before offering the job")
+        if not await is_driver_verified(target_driver):
+            raise HTTPException(status_code=400, detail="Cannot offer job: driver verification is not approved")
     if "dropoff_address" in updates:
         updates["delivery_address"] = updates["dropoff_address"]
     if "payout_amount" in updates:
@@ -1824,7 +1927,6 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
         updates["estimated_distance_km"] = updates["distance_km"]
     if "assigned_driver_id" in updates:
         updates["accepted_by"] = updates["assigned_driver_id"]
-    new_status = updates.get("status")
     now = datetime.now(timezone.utc).isoformat()
     if new_status == "accepted" and not job.get("accepted_at"):
         updates["accepted_at"] = now
@@ -1834,17 +1936,45 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
         updates["delivered_at"] = now
         updates["completed_at"] = now
     await db.jobs.update_one({"id": job_id}, {"$set": updates})
-    return await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    await log_audit(current_user, "update", "job", job_id)
+    updated = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    return scoped_job(updated, current_user)
 
 @api_router.delete("/jobs/{job_id}")
 async def delete_job(job_id: str, current_user: dict = Depends(get_current_user)):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.get("posted_by") != current_user["id"] and current_user.get("role") != "admin":
+    allowed = job.get("posted_by") == current_user["id"] or current_user.get("role") == "admin"
+    if not allowed and current_user.get("role") == "facility" and job.get("facility_id"):
+        allowed = job["facility_id"] in await facility_ids_owned_by(current_user["id"])
+    if not allowed:
         raise HTTPException(status_code=403, detail="Not authorized")
     await db.jobs.delete_one({"id": job_id})
+    await log_audit(current_user, "delete", "job", job_id)
     return {"status": "deleted", "job_id": job_id}
+
+# ---- Audit logs (compliance) ----
+@api_router.get("/audit-logs")
+async def get_audit_logs(
+    entity: Optional[str] = None,
+    entity_id: Optional[str] = None,
+    actor_id: Optional[str] = None,
+    action: Optional[str] = None,
+    limit: int = 200,
+    staff: dict = Depends(require_staff)
+):
+    query = {}
+    if entity:
+        query["entity"] = entity
+    if entity_id:
+        query["entity_id"] = entity_id
+    if actor_id:
+        query["actor_id"] = actor_id
+    if action:
+        query["action"] = action
+    logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(min(limit, 1000))
+    return {"logs": logs, "count": len(logs)}
 
 # Health check
 @api_router.get("/")
@@ -1892,6 +2022,16 @@ async def startup_event():
     }})
     # Backfill status on existing users (marketplace data model)
     await db.users.update_many({"status": {"$exists": False}}, {"$set": {"status": "approved"}})
+    # Audit log indexes (compliance)
+    await db.audit_logs.create_index("entity_id")
+    await db.audit_logs.create_index("actor_id")
+    await db.audit_logs.create_index("timestamp")
+    # Job query indexes
+    await db.jobs.create_index("status")
+    await db.jobs.create_index("accepted_by")
+    await db.jobs.create_index("assigned_driver_id")
+    await db.jobs.create_index("posted_by")
+    await db.jobs.create_index("facility_id")
     # Auto-promote admin if ADMIN_EMAIL user already exists
     if ADMIN_EMAIL:
         await db.users.update_one(
