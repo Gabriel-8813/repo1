@@ -227,6 +227,16 @@ Build an app for medical transportation that people can register and pay a month
 - Tested: iteration 18 — 38 backend assertions + E2E math (20% + 10% override) + all frontend flows green; minor fixes re-verified (72/72 pytest)
 - Known backlog note: export endpoints pass JWT as ?auth= query param (existing app-wide pattern) — consider short-lived download tokens later
 
+### Admin Compliance Dashboard (June 2026)
+- **Searchable audit log**: GET /api/audit-logs extended (q free-text incl. actor name/email, date_from/date_to, actor enrichment); job/custody 'view' access logging with 10-min dedupe (after RBAC check)
+- **GET /api/admin/compliance/missing-pod** (delivered jobs w/o delivered event or signature evidence) and **/credential-alerts** (insurance expired/expiring, suspended/rejected active drivers)
+- **Chain-of-custody PDF export** per job (staff only, export audited): job details + custody events (GPS/recipient/evidence) + audit history
+- **Data retention**: setting 30-3650 days (default 365), daily background purge loop + manual purge; redacts recipient PII with [REDACTED] and nulls signature evidence; purges audited (skipped when 0 purged by system)
+- **Breach-report helper**: date-range compilation of affected records with summary counts + CSV export (audited)
+- **Frontend Compliance tab**: stat cards w/ loading skeleton, filterable audit table, missing-POD + credential alert tables, custody export card, retention card, breach card
+- Tested: iteration 19 (37/37 backend after fixes, frontend 100%); DB cleaned (569 duplicate view rows, 6 zero-purge audit spam)
+- Backlog notes from review: ?auth= JWT in download URLs (app-wide pattern) → short-lived tokens later; missing-pod/breach scans unpaginated; CORS wildcard; login lockout
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
