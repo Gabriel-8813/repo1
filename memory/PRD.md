@@ -175,6 +175,11 @@ Build an app for medical transportation that people can register and pay a month
 - **Active Delivery screen**: live 1s countdown banner on Stage 1 ("Free cancellation for 4:39 — after that a $15.00 fee applies", turns red when expired) + Cancel button with fee-aware confirm dialog
 - Self-tested: UI countdown ticking + free cancel (returns to pool), late cancel via backdated accepted_at (charged=true, $15 ledger entry), post-pickup 400 block; regression 64/64 (commission + active delivery + RBAC suites)
 
+### Driver Earnings & Trip History (June 2026)
+- **GET /api/driver/earnings** (driver/admin only): per-trip {gross payout, commission line item (from ledger, fallback rate), net}, returned trips at $0, cancellation_fees list, current pay period (Monday-start week UTC) totals {gross, commission, fees, net, trip_count}, lifetime {total_trips (drivers record), rating_avg/count (visible reviews), gross/commission/fees/net}
+- **/earnings page** (EarningsPage.js, VerifiedDriverRoute; Earnings nav link added to Dashboard/Jobs/Billing/Permits navs): dark pay-period card with net + transparent 20% commission and cancel-fee line items; lifetime stat tiles (trips, star rating, lifetime net); Trip History list (tap → read-only Chain of Custody dialog: event timeline with icons, timestamps, GPS points, recipient info, notes, and proof-of-delivery evidence image loaded via /api/delivery-evidence/{id}/file?auth=token); Cancellation Fees section
+- Self-tested: curl (math verified: $42.50 gross − $8.50 commission − $15 fee = $19 period net; facility 403) + mobile screenshots (page + custody dialog with signature evidence rendering)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

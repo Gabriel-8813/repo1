@@ -176,6 +176,7 @@ const BillingPage = () => {
             <div className="hidden md:flex items-center gap-1">
               <Link to="/dashboard" className="nav-link">Dashboard</Link>
               <Link to="/jobs" className="nav-link">Jobs</Link>
+              <Link to="/earnings" className="nav-link">Earnings</Link>
               <Link to="/permits" className="nav-link">Permits</Link>
               <Link to="/billing" className="nav-link active">Billing</Link>
               {user?.role === 'admin' && <Link to="/admin" className="nav-link text-purple-700">Admin</Link>}

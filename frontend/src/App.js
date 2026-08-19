@@ -21,6 +21,7 @@ import FacilityHomePage from "./pages/FacilityHomePage";
 import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
+import EarningsPage from "./pages/EarningsPage";
 
 // Protected Route Component (kept for generic authed pages)
 // eslint-disable-next-line no-unused-vars
@@ -174,6 +175,14 @@ function AppRoutes() {
         element={
           <VerifiedDriverRoute>
             <ActiveDeliveryPage />
+          </VerifiedDriverRoute>
+        } 
+      />
+      <Route 
+        path="/earnings" 
+        element={
+          <VerifiedDriverRoute>
+            <EarningsPage />
           </VerifiedDriverRoute>
         } 
       />
