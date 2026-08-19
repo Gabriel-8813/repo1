@@ -137,6 +137,12 @@ Build an app for medical transportation that people can register and pay a month
 - **Tested**: 30/30 backend pytest (`/app/backend/tests/test_rbac_marketplace.py`, reusable regression suite) + all frontend role-login/guard/logout flows via Playwright — zero issues (iteration_9)
 - **Known note**: visual-edits babel plugin crashes on component-as-prop patterns across files — placeholder pages kept self-contained
 
+### Chain-of-Custody Events (June 2026)
+- **New `custody_events` collection** (append-only, legal chain-of-custody per delivery): id, job_id, event_type (pickup_confirmed | in_transit_ping | delivery_attempted | delivered | returned | exception), timestamp (server-set), gps_lat/gps_lng (range-validated), actor_id (server-set from token), evidence_url (signature/photo/ID capture), recipient_name, recipient_relationship, notes
+- **Endpoints**: `POST /api/jobs/{id}/custody-events` (assigned driver or staff only; facilities 403), `GET /api/jobs/{id}/custody-events` (chronological, job-access scoped), `GET /api/custody-events/{id}`. PUT/PATCH/DELETE return **405 "append-only"** — records are immutable once created
+- Every custody-event creation is also written to the audit log (entity=custody_event). Indexes on job_id + timestamp
+- **Tested**: 13/13 curl smoke checks + 30/30 RBAC regression suite re-run — zero issues
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
