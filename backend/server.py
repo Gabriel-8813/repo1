@@ -498,6 +498,19 @@ async def log_audit(actor: dict, action: str, entity: str, entity_id: str, detai
     except Exception as e:
         logging.getLogger(__name__).error(f"Audit log write failed: {e}")
 
+async def log_view_once(actor: dict, entity: str, entity_id: str):
+    """Log a 'view' audit event, deduped per actor/entity within 10 minutes."""
+    try:
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        recent = await db.audit_logs.find_one({
+            "actor_id": actor["id"], "action": "view", "entity": entity,
+            "entity_id": entity_id, "timestamp": {"$gte": cutoff}
+        }, {"_id": 1})
+        if not recent:
+            await log_audit(actor, "view", entity, entity_id)
+    except Exception as e:
+        logging.getLogger(__name__).error(f"View log failed: {e}")
+
 def insurance_flag_of(insurance_expiry: Optional[str]) -> Optional[str]:
     """Returns 'expired', 'expiring_soon' (<=30 days) or None."""
     if not insurance_expiry:
@@ -2207,7 +2220,7 @@ async def get_job_by_id(job_id: str, current_user: dict = Depends(get_current_us
     elif role == "driver":
         if job.get("status") != "open" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
             raise HTTPException(status_code=403, detail="Not authorized")
-    await log_audit(current_user, "view", "job", job_id)
+    await log_view_once(current_user, "job", job_id)
     return scoped_job(job, current_user)
 
 @api_router.put("/jobs/{job_id}")
@@ -2495,6 +2508,7 @@ async def list_custody_events(job_id: str, current_user: dict = Depends(get_curr
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
     await assert_job_access(job, current_user)
+    await log_view_once(current_user, "job_custody", job_id)
     events = await db.custody_events.find({"job_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
     return {"custody_events": events, "count": len(events)}
 
@@ -2526,6 +2540,9 @@ async def get_audit_logs(
     entity_id: Optional[str] = None,
     actor_id: Optional[str] = None,
     action: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    q: Optional[str] = None,
     limit: int = 200,
     staff: dict = Depends(require_staff)
 ):
@@ -2538,7 +2555,27 @@ async def get_audit_logs(
         query["actor_id"] = actor_id
     if action:
         query["action"] = action
+    ts = {}
+    if date_from:
+        ts["$gte"] = date_from
+    if date_to:
+        ts["$lte"] = date_to + ("T23:59:59.999999+00:00" if len(date_to) == 10 else "")
+    if ts:
+        query["timestamp"] = ts
+    if q:
+        rx = {"$regex": re.escape(q), "$options": "i"}
+        matched_users = await db.users.find(
+            {"$or": [{"email": rx}, {"full_name": rx}]}, {"_id": 0, "id": 1}).to_list(200)
+        actor_ids = [u["id"] for u in matched_users]
+        query.setdefault("$and", []).append(
+            {"$or": [{"action": rx}, {"entity": rx}, {"entity_id": rx}, {"actor_id": {"$in": actor_ids}}]})
     logs = await db.audit_logs.find(query, {"_id": 0}).sort("timestamp", -1).to_list(min(limit, 1000))
+    uids = list({l["actor_id"] for l in logs})
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": uids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
+    for l in logs:
+        u = users.get(l["actor_id"])
+        l["actor_name"] = u.get("full_name") if u else None
+        l["actor_email"] = u.get("email") if u else None
     return {"logs": logs, "count": len(logs)}
 
 # ---- Driver Onboarding (documents + verification) ----
@@ -3304,6 +3341,305 @@ async def admin_billing_export(request: Request, month: Optional[str] = None, re
     return Response(content=buf.getvalue(), media_type="text/csv",
                     headers={"Content-Disposition": f"attachment; filename={fname}"})
 
+# ---- Admin: Compliance ----
+DEFAULT_RETENTION_DAYS = 365
+REDACTED = "[REDACTED]"
+
+async def get_retention_days() -> int:
+    doc = await db.settings.find_one({"key": "data_retention"}, {"_id": 0})
+    return int(doc["value"]["retention_days"]) if doc and doc.get("value") else DEFAULT_RETENTION_DAYS
+
+async def run_retention_purge(actor: Optional[dict] = None) -> dict:
+    days = await get_retention_days()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat()
+    jobs = await db.jobs.find({
+        "status": {"$in": ["delivered", "completed", "cancelled", "returned"]},
+        "data_purged": {"$ne": True},
+        "created_at": {"$lt": cutoff}
+    }, {"_id": 0, "id": 1}).to_list(20000)
+    job_ids = [j["id"] for j in jobs]
+    now = datetime.now(timezone.utc).isoformat()
+    if job_ids:
+        await db.jobs.update_many({"id": {"$in": job_ids}}, {"$set": {
+            "recipient_name": REDACTED, "recipient_phone": REDACTED,
+            "data_purged": True, "purged_at": now
+        }})
+        await db.custody_events.update_many(
+            {"job_id": {"$in": job_ids}},
+            [{"$set": {
+                "recipient_name": {"$cond": [{"$ifNull": ["$recipient_name", False]}, REDACTED, "$recipient_name"]},
+                "recipient_relationship": {"$cond": [{"$ifNull": ["$recipient_relationship", False]}, REDACTED, "$recipient_relationship"]},
+                "evidence_url": None
+            }}]
+        )
+    result = {"purged_jobs": len(job_ids), "retention_days": days, "cutoff": cutoff, "ran_at": now}
+    await db.settings.update_one({"key": "last_purge"}, {"$set": {"key": "last_purge", "value": result}}, upsert=True)
+    if actor or job_ids:
+        system_actor = actor or {"id": "system", "role": "system"}
+        await log_audit(system_actor, "purge", "data_retention", "recipient_pii", details=result)
+    return result
+
+async def retention_purge_loop():
+    while True:
+        try:
+            await run_retention_purge()
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Retention purge failed: {e}")
+        await asyncio.sleep(24 * 3600)
+
+@api_router.get("/admin/compliance/retention")
+async def get_retention_setting(admin: dict = Depends(require_admin)):
+    last = await db.settings.find_one({"key": "last_purge"}, {"_id": 0})
+    return {"retention_days": await get_retention_days(), "last_purge": last["value"] if last else None}
+
+class RetentionUpdate(BaseModel):
+    retention_days: int = Field(ge=30, le=3650)
+
+@api_router.put("/admin/compliance/retention")
+async def update_retention_setting(payload: RetentionUpdate, admin: dict = Depends(require_admin)):
+    prev = await get_retention_days()
+    await db.settings.update_one(
+        {"key": "data_retention"},
+        {"$set": {"key": "data_retention", "value": {"retention_days": payload.retention_days},
+                  "updated_at": datetime.now(timezone.utc).isoformat()}},
+        upsert=True)
+    await log_audit(admin, "update", "data_retention", "setting", details={"from": prev, "to": payload.retention_days})
+    return {"retention_days": payload.retention_days}
+
+@api_router.post("/admin/compliance/purge")
+async def manual_retention_purge(admin: dict = Depends(require_admin)):
+    return await run_retention_purge(actor=admin)
+
+@api_router.get("/admin/compliance/missing-pod")
+async def compliance_missing_pod(staff: dict = Depends(require_staff)):
+    jobs = await db.jobs.find({"status": {"$in": ["delivered", "completed"]}}, {"_id": 0}).to_list(10000)
+    job_ids = [j["id"] for j in jobs]
+    delivered_events = {}
+    async for e in db.custody_events.find({"job_id": {"$in": job_ids}, "event_type": "delivered"}, {"_id": 0}):
+        delivered_events[e["job_id"]] = e
+    fac_ids = list({j.get("facility_id") for j in jobs if j.get("facility_id")})
+    facilities = {f["id"]: f async for f in db.facilities.find({"id": {"$in": fac_ids}}, {"_id": 0, "id": 1, "name": 1})}
+    duids = list({j.get("accepted_by") or j.get("assigned_driver_id") for j in jobs})
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": duids}}, {"_id": 0, "id": 1, "full_name": 1})}
+    out = []
+    for j in jobs:
+        ev = delivered_events.get(j["id"])
+        if ev and ev.get("evidence_url"):
+            continue
+        if ev and j.get("data_purged"):
+            continue
+        did = j.get("accepted_by") or j.get("assigned_driver_id")
+        out.append({
+            "job_id": j["id"],
+            "title": j.get("title") or "Medical transport",
+            "facility_name": facilities.get(j.get("facility_id"), {}).get("name") or "Direct booking",
+            "driver_name": users.get(did, {}).get("full_name"),
+            "delivered_at": j.get("delivered_at") or j.get("completed_at"),
+            "issue": "no_delivered_event" if not ev else "no_signature_evidence"
+        })
+    out.sort(key=lambda x: x["delivered_at"] or "", reverse=True)
+    return {"jobs": out, "count": len(out)}
+
+@api_router.get("/admin/compliance/credential-alerts")
+async def compliance_credential_alerts(staff: dict = Depends(require_staff)):
+    recs = await db.drivers.find({}, {"_id": 0}).to_list(2000)
+    uids = [r["user_id"] for r in recs]
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": uids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
+    alerts = []
+    for r in recs:
+        flag = insurance_flag_of(r.get("insurance_expiry"))
+        status = r.get("verification_status", "incomplete")
+        issues = []
+        if flag == "expired":
+            issues.append({"type": "insurance_expired", "detail": f"Insurance expired {r.get('insurance_expiry')}"})
+        elif flag == "expiring_soon":
+            issues.append({"type": "insurance_expiring", "detail": f"Insurance expires {r.get('insurance_expiry')}"})
+        if status in ("suspended", "rejected") and r.get("total_trips", 0) > 0:
+            issues.append({"type": f"verification_{status}", "detail": f"Active driver is {status}"})
+        if issues:
+            u = users.get(r["user_id"], {})
+            alerts.append({
+                "user_id": r["user_id"],
+                "driver_name": u.get("full_name"),
+                "email": u.get("email"),
+                "verification_status": status,
+                "insurance_expiry": r.get("insurance_expiry"),
+                "issues": issues
+            })
+    return {"alerts": alerts, "count": len(alerts)}
+
+@api_router.get("/jobs/{job_id}/custody-record/pdf")
+async def custody_record_pdf(job_id: str, request: Request, auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    if current_user.get("role") not in ("admin", "dispatcher"):
+        raise HTTPException(status_code=403, detail="Staff access required")
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    events = await db.custody_events.find({"job_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
+    audits = await db.audit_logs.find({"entity_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
+    uids = list({e.get("actor_id") for e in events if e.get("actor_id")} | {a["actor_id"] for a in audits})
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": uids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
+    facility = await db.facilities.find_one({"id": job.get("facility_id")}, {"_id": 0}) if job.get("facility_id") else None
+    await log_audit(current_user, "export", "job_custody_record", job_id)
+
+    import io
+    from reportlab.lib.pagesizes import letter
+    from reportlab.lib import colors
+    from reportlab.lib.units import inch
+    from reportlab.platypus import SimpleDocTemplate, Table as RLTable, TableStyle, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=letter, topMargin=0.7 * inch)
+    styles = getSampleStyleSheet()
+    small = styles["BodyText"]
+    small.fontSize = 8
+    story = [
+        Paragraph("MediTrans Ontario — Chain of Custody Record", styles["Title"]),
+        Paragraph(f"Job ID: {job['id']} · Generated {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')} by {current_user.get('email')}", small),
+        Spacer(1, 12),
+        Paragraph("Job Details", styles["Heading2"]),
+    ]
+    detail_rows = [
+        ["Delivery", job.get("title") or "Medical transport"],
+        ["Status", job.get("status", "")],
+        ["Facility", (facility or {}).get("name") or "Direct booking"],
+        ["Pickup", job.get("pickup_address") or ""],
+        ["Dropoff", job.get("delivery_address") or job.get("dropoff_address") or ""],
+        ["Handling flags", ", ".join(job.get("handling_flags") or []) or "none"],
+        ["Recipient", job.get("recipient_name") or "—"],
+        ["Created", (job.get("created_at") or "")[:19].replace("T", " ")],
+        ["Delivered", (job.get("delivered_at") or job.get("completed_at") or "—")[:19].replace("T", " ")],
+    ]
+    t = RLTable(detail_rows, colWidths=[1.5 * inch, 5 * inch])
+    t.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 8),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("BACKGROUND", (0, 0), (0, -1), colors.whitesmoke),
+    ]))
+    story += [t, Spacer(1, 12), Paragraph("Custody Events", styles["Heading2"])]
+    ev_rows = [["Time (UTC)", "Event", "Actor", "GPS", "Recipient", "Evidence", "Notes"]]
+    for e in events:
+        actor = users.get(e.get("actor_id"), {})
+        gps = f"{e.get('gps_lat'):.5f},{e.get('gps_lng'):.5f}" if e.get("gps_lat") is not None else "—"
+        ev_rows.append([
+            (e.get("timestamp") or "")[:19].replace("T", " "),
+            e.get("event_type", ""),
+            actor.get("full_name") or e.get("actor_id", "")[:8],
+            gps,
+            e.get("recipient_name") or "—",
+            "yes" if e.get("evidence_url") else "no",
+            (e.get("notes") or "")[:60]
+        ])
+    t2 = RLTable(ev_rows, colWidths=[1.1 * inch, 1.0 * inch, 1.0 * inch, 1.1 * inch, 0.9 * inch, 0.5 * inch, 1.4 * inch])
+    t2.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+    ]))
+    story += [t2, Spacer(1, 12), Paragraph("Access & Change History (Audit Trail)", styles["Heading2"])]
+    au_rows = [["Time (UTC)", "Actor", "Role", "Action", "Entity"]]
+    for a in audits[-60:]:
+        u = users.get(a["actor_id"], {})
+        au_rows.append([
+            (a.get("timestamp") or "")[:19].replace("T", " "),
+            u.get("full_name") or u.get("email") or a["actor_id"][:8],
+            a.get("actor_role", ""),
+            a.get("action", ""),
+            a.get("entity", "")
+        ])
+    t3 = RLTable(au_rows, colWidths=[1.3 * inch, 1.7 * inch, 0.9 * inch, 0.9 * inch, 1.4 * inch])
+    t3.setStyle(TableStyle([
+        ("FONTSIZE", (0, 0), (-1, -1), 7),
+        ("GRID", (0, 0), (-1, -1), 0.25, colors.grey),
+        ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1e3a5f")),
+        ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+    ]))
+    story.append(t3)
+    doc.build(story)
+    return Response(content=buf.getvalue(), media_type="application/pdf",
+                    headers={"Content-Disposition": f"attachment; filename=custody-record-{job_id[:8]}.pdf"})
+
+@api_router.get("/admin/compliance/breach-report")
+async def compliance_breach_report(date_from: str, date_to: str, format: Optional[str] = None,
+                                   request: Request = None, auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    if current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Admin access required")
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", date_from) or not re.match(r"^\d{4}-\d{2}-\d{2}$", date_to):
+        raise HTTPException(status_code=422, detail="Dates must be YYYY-MM-DD")
+    jobs = await db.jobs.find({"created_at": {"$gte": date_from, "$lte": date_to + "T23:59:59.999999+00:00"}}, {"_id": 0}).to_list(20000)
+    fac_ids = list({j.get("facility_id") for j in jobs if j.get("facility_id")})
+    facilities = {f["id"]: f async for f in db.facilities.find({"id": {"$in": fac_ids}}, {"_id": 0, "id": 1, "name": 1, "billing_email": 1})}
+    duids = list({j.get("accepted_by") or j.get("assigned_driver_id") for j in jobs})
+    users = {u["id"]: u async for u in db.users.find({"id": {"$in": duids}}, {"_id": 0, "id": 1, "full_name": 1, "email": 1})}
+    records = []
+    for j in jobs:
+        did = j.get("accepted_by") or j.get("assigned_driver_id")
+        has_pii = bool((j.get("recipient_name") and j.get("recipient_name") != REDACTED) or
+                       (j.get("recipient_phone") and j.get("recipient_phone") != REDACTED))
+        records.append({
+            "job_id": j["id"],
+            "created_at": j.get("created_at"),
+            "status": j.get("status"),
+            "facility_name": facilities.get(j.get("facility_id"), {}).get("name") or "Direct booking",
+            "driver_name": users.get(did, {}).get("full_name"),
+            "pickup_address": j.get("pickup_address"),
+            "delivery_address": j.get("delivery_address") or j.get("dropoff_address"),
+            "recipient_name": j.get("recipient_name") or "—",
+            "recipient_phone": j.get("recipient_phone") or "—",
+            "contains_personal_data": has_pii,
+            "data_purged": bool(j.get("data_purged"))
+        })
+    summary = {
+        "date_from": date_from, "date_to": date_to,
+        "affected_jobs": len(records),
+        "jobs_with_personal_data": sum(1 for r in records if r["contains_personal_data"]),
+        "unique_recipients": len({r["recipient_name"] for r in records if r["contains_personal_data"]}),
+        "drivers_involved": len({r["driver_name"] for r in records if r["driver_name"]}),
+        "facilities_involved": len({r["facility_name"] for r in records})
+    }
+    await log_audit(current_user, "export" if format == "csv" else "view", "breach_report", f"{date_from}_{date_to}", details=summary)
+    if format == "csv":
+        import io, csv
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow(["MediTrans Ontario — Breach Report (affected records)", f"{date_from} to {date_to}"])
+        w.writerow(["Affected jobs", summary["affected_jobs"], "With personal data", summary["jobs_with_personal_data"],
+                    "Unique recipients", summary["unique_recipients"], "Drivers", summary["drivers_involved"], "Facilities", summary["facilities_involved"]])
+        w.writerow([])
+        w.writerow(["Job ID", "Created", "Status", "Facility", "Driver", "Pickup", "Delivery", "Recipient", "Recipient Phone", "Contains Personal Data", "Purged"])
+        for r in records:
+            w.writerow([r["job_id"], (r["created_at"] or "")[:19], r["status"], r["facility_name"], r["driver_name"] or "",
+                        r["pickup_address"] or "", r["delivery_address"] or "", r["recipient_name"], r["recipient_phone"],
+                        "yes" if r["contains_personal_data"] else "no", "yes" if r["data_purged"] else "no"])
+        return Response(content=buf.getvalue(), media_type="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=breach-report-{date_from}-{date_to}.csv"})
+    return {"summary": summary, "records": records}
+
 @api_router.get("/dispatch/board")
 async def dispatch_board(staff: dict = Depends(require_staff)):
     jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(300)
@@ -3390,6 +3726,8 @@ async def startup_event():
     await db.custody_events.create_index("timestamp")
     # Driver documents index
     await db.driver_documents.create_index([("user_id", 1), ("doc_type", 1)])
+    # Daily data-retention purge (compliance)
+    asyncio.create_task(retention_purge_loop())
     # Init object storage for driver documents
     try:
         await asyncio.to_thread(init_storage)
