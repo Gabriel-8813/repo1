@@ -397,6 +397,7 @@ class CustodyEventCreate(BaseModel):
     recipient_name: Optional[str] = None
     recipient_relationship: Optional[str] = None
     notes: Optional[str] = None
+    checklist: Optional[dict] = None
 
 # Auth helpers
 def hash_password(password: str) -> str:
@@ -1017,7 +1018,7 @@ async def get_tip_info(job_id: str):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Trip not found")
-    if job.get("status") != "completed":
+    if job.get("status") not in ("completed", "delivered"):
         raise HTTPException(status_code=400, detail="Tips can only be sent for completed trips")
     driver_id = job.get("accepted_by")
     driver = await db.users.find_one({"id": driver_id}, {"_id": 0, "password_hash": 0}) if driver_id else None
@@ -1062,7 +1063,7 @@ async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Req
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Trip not found")
-    if job.get("status") != "completed":
+    if job.get("status") not in ("completed", "delivered"):
         raise HTTPException(status_code=400, detail="Tips can only be sent for completed trips")
     driver_id = job.get("accepted_by")
     if not driver_id:
@@ -1207,7 +1208,7 @@ async def get_review_info(job_id: str):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Trip not found")
-    if job.get("status") != "completed":
+    if job.get("status") not in ("completed", "delivered"):
         raise HTTPException(status_code=400, detail="Only completed trips can be reviewed")
     driver = await db.users.find_one({"id": job.get("accepted_by")}, {"_id": 0, "password_hash": 0})
     existing = await db.reviews.find_one({"job_id": job_id}, {"_id": 0})
@@ -1233,7 +1234,7 @@ async def submit_review(job_id: str, review: ReviewCreate):
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Trip not found")
-    if job.get("status") != "completed":
+    if job.get("status") not in ("completed", "delivered"):
         raise HTTPException(status_code=400, detail="Only completed trips can be reviewed")
     driver_id = job.get("accepted_by")
     if not driver_id:
@@ -1597,23 +1598,33 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
         raise HTTPException(status_code=400, detail="Only active jobs can be completed")
     
     now = datetime.now(timezone.utc)
+    result = await settle_job_completion(job, current_user["id"], "completed")
+    await log_audit(current_user, "complete", "job", job_id)
+    
+    updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    return {
+        "job": updated_job,
+        **result
+    }
+
+async def settle_job_completion(job: dict, driver_id: str, final_status: str = "completed") -> dict:
+    now = datetime.now(timezone.utc)
     await db.jobs.update_one(
-        {"id": job_id},
+        {"id": job["id"]},
         {"$set": {
-            "status": "completed",
+            "status": final_status,
             "completed_at": now.isoformat(),
             "delivered_at": now.isoformat()
         }}
     )
-    await log_audit(current_user, "complete", "job", job_id)
-    await db.drivers.update_one({"user_id": current_user["id"]}, {"$inc": {"total_trips": 1}})
+    await db.drivers.update_one({"user_id": driver_id}, {"$inc": {"total_trips": 1}})
     
     # Record gross earnings (what the driver charged the customer)
-    gross = float(job["offered_price"])
+    gross = float(job.get("offered_price") or job.get("payout_amount") or 0)
     earnings_doc = {
         "id": str(uuid.uuid4()),
-        "driver_id": current_user["id"],
-        "job_id": job_id,
+        "driver_id": driver_id,
+        "job_id": job["id"],
         "amount": gross,
         "created_at": now.isoformat()
     }
@@ -1625,8 +1636,8 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
     commission_amount = round(gross * commission_rate, 2)
     ledger_entry = {
         "id": str(uuid.uuid4()),
-        "driver_id": current_user["id"],
-        "job_id": job_id,
+        "driver_id": driver_id,
+        "job_id": job["id"],
         "type": "commission",
         "amount": commission_amount,
         "status": "owed",
@@ -1635,11 +1646,7 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
         "created_at": now.isoformat()
     }
     await db.ledger.insert_one(ledger_entry)
-    ledger_entry.pop("_id", None)
-    
-    updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     return {
-        "job": updated_job,
         "gross_earnings": gross,
         "commission_charged": commission_amount,
         "net_earnings": round(gross - commission_amount, 2)
@@ -1690,7 +1697,7 @@ async def admin_stats(admin: dict = Depends(require_admin)):
     total_jobs = await db.jobs.count_documents({})
     open_jobs = await db.jobs.count_documents({"status": "open"})
     in_progress_jobs = await db.jobs.count_documents({"status": {"$in": ["in_progress", "accepted", "picked_up", "in_transit"]}})
-    completed_jobs = await db.jobs.count_documents({"status": "completed"})
+    completed_jobs = await db.jobs.count_documents({"status": {"$in": ["completed", "delivered"]}})
 
     ledger_entries = await db.ledger.find({}, {"_id": 0}).to_list(100000)
     commission_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") == "owed"), 2)
@@ -2157,6 +2164,43 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         raise HTTPException(status_code=403, detail="Only the assigned driver or staff can record custody events")
     if role == "driver" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
         raise HTTPException(status_code=403, detail="Only the assigned driver can record custody events for this job")
+
+    et = payload.event_type
+    status = job.get("status")
+    if et == "pickup_confirmed":
+        if status not in ("accepted", "in_progress"):
+            raise HTTPException(status_code=400, detail="Pickup can only be confirmed on an accepted job")
+        cl = payload.checklist or {}
+        missing = []
+        if not cl.get("label_confirmed"):
+            missing.append("recipient name on label matches job")
+        if not cl.get("item_count_confirmed"):
+            missing.append("item count confirmed")
+        cold = "cold_chain" in (job.get("handling_flags") or []) or job.get("temperature_controlled")
+        if cold and not cl.get("cooler_confirmed"):
+            missing.append("insulated cooler in use (required for cold chain)")
+        if missing:
+            raise HTTPException(status_code=400, detail=f"Pickup checklist incomplete: {'; '.join(missing)}")
+    elif et == "in_transit_ping":
+        if status not in ("picked_up", "in_transit"):
+            raise HTTPException(status_code=400, detail="Transit pings require a picked-up job")
+    elif et == "delivered":
+        if status not in ("picked_up", "in_transit"):
+            raise HTTPException(status_code=400, detail="Confirm pickup before marking delivered")
+        if not payload.recipient_name:
+            raise HTTPException(status_code=422, detail="recipient_name is required for delivery")
+        if not payload.evidence_url:
+            raise HTTPException(status_code=422, detail="Signature or ID evidence is required — items can never be left at the door")
+    elif et == "delivery_attempted":
+        if status not in ("picked_up", "in_transit"):
+            raise HTTPException(status_code=400, detail="No active delivery to abort")
+    elif et == "returned":
+        if status not in ("picked_up", "in_transit"):
+            raise HTTPException(status_code=400, detail="No active delivery to return")
+        attempted = await db.custody_events.find_one({"job_id": job_id, "event_type": "delivery_attempted"}, {"_id": 0})
+        if not attempted:
+            raise HTTPException(status_code=400, detail="Log a delivery attempt before returning the item")
+
     doc = {
         "id": str(uuid.uuid4()),
         "job_id": job_id,
@@ -2167,7 +2211,137 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
     await db.custody_events.insert_one(doc)
     await log_audit(current_user, "create", "custody_event", doc["id"])
     doc.pop("_id", None)
-    return doc
+
+    settlement = None
+    new_status = status
+    if et == "pickup_confirmed":
+        new_status = "picked_up"
+        await db.jobs.update_one({"id": job_id}, {"$set": {"status": "picked_up", "picked_up_at": doc["timestamp"]}})
+    elif et == "in_transit_ping" and status == "picked_up":
+        new_status = "in_transit"
+        await db.jobs.update_one({"id": job_id}, {"$set": {"status": "in_transit"}})
+    elif et == "delivered":
+        driver_id = job.get("assigned_driver_id") or job.get("accepted_by") or current_user["id"]
+        settlement = await settle_job_completion(job, driver_id, "delivered")
+        new_status = "delivered"
+    elif et == "returned":
+        new_status = "returned"
+        await db.jobs.update_one({"id": job_id}, {"$set": {"status": "returned"}})
+        await notify_job_return(job)
+
+    return {**doc, "job_status": new_status, "settlement": settlement}
+
+# ---- Delivery evidence (signature / ID capture) ----
+EVIDENCE_KINDS = {"signature", "id_photo"}
+
+@api_router.post("/jobs/{job_id}/delivery-evidence", status_code=201)
+async def upload_delivery_evidence(job_id: str, file: UploadFile = File(...), kind: str = Form("signature"), current_user: dict = Depends(get_current_user)):
+    if kind not in EVIDENCE_KINDS:
+        raise HTTPException(status_code=422, detail="kind must be 'signature' or 'id_photo'")
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    role = current_user.get("role")
+    if role == "driver" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+        raise HTTPException(status_code=403, detail="Only the assigned driver can upload delivery evidence")
+    if role == "facility":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    content_type = (file.content_type or "").lower()
+    if content_type not in ALLOWED_UPLOAD_TYPES:
+        raise HTTPException(status_code=422, detail="Only JPG, PNG, WEBP, HEIC or PDF files are accepted")
+    data = await file.read()
+    if len(data) > MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
+    if not data:
+        raise HTTPException(status_code=422, detail="Empty file")
+    ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "png"
+    path = f"{STORAGE_APP_PREFIX}/delivery-evidence/{job_id}/{kind}-{uuid.uuid4()}.{ext}"
+    try:
+        result = await asyncio.to_thread(put_object, path, data, content_type)
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Evidence upload failed: {e}")
+        raise HTTPException(status_code=502, detail="Evidence storage is temporarily unavailable. Please try again.")
+    evidence_id = str(uuid.uuid4())
+    await db.delivery_evidence.insert_one({
+        "id": evidence_id,
+        "job_id": job_id,
+        "kind": kind,
+        "storage_path": result["path"],
+        "content_type": content_type,
+        "size": len(data),
+        "uploaded_by": current_user["id"],
+        "uploaded_at": datetime.now(timezone.utc).isoformat()
+    })
+    await log_audit(current_user, "upload", "delivery_evidence", evidence_id)
+    return {"evidence_id": evidence_id, "evidence_url": f"/api/delivery-evidence/{evidence_id}/file", "kind": kind}
+
+@api_router.get("/delivery-evidence/{evidence_id}/file")
+async def serve_delivery_evidence(evidence_id: str, request: Request, auth: Optional[str] = Query(None)):
+    if auth:
+        try:
+            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+            if not current_user:
+                raise HTTPException(status_code=401, detail="User not found")
+        except jwt.ExpiredSignatureError:
+            raise HTTPException(status_code=401, detail="Token expired")
+        except jwt.InvalidTokenError:
+            raise HTTPException(status_code=401, detail="Invalid token")
+    else:
+        current_user = await get_current_user(request)
+    ev = await db.delivery_evidence.find_one({"id": evidence_id}, {"_id": 0})
+    if not ev:
+        raise HTTPException(status_code=404, detail="Evidence not found")
+    job = await db.jobs.find_one({"id": ev["job_id"]}, {"_id": 0})
+    if job:
+        await assert_job_access(job, current_user)
+    elif current_user.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    try:
+        data, ct = await asyncio.to_thread(get_object, ev["storage_path"])
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Evidence fetch failed: {e}")
+        raise HTTPException(status_code=502, detail="Evidence storage is temporarily unavailable")
+    await log_audit(current_user, "view", "delivery_evidence", evidence_id)
+    return Response(content=data, media_type=ev.get("content_type") or ct)
+
+# ---- Notifications ----
+async def notify_users(user_ids, type_: str, job_id: str, message: str):
+    now = datetime.now(timezone.utc).isoformat()
+    docs = [{
+        "id": str(uuid.uuid4()),
+        "user_id": uid,
+        "type": type_,
+        "job_id": job_id,
+        "message": message,
+        "read": False,
+        "created_at": now
+    } for uid in {u for u in user_ids if u}]
+    if docs:
+        await db.notifications.insert_many(docs)
+
+async def notify_job_return(job: dict):
+    targets = [job.get("posted_by")]
+    if job.get("facility_id"):
+        fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "owner_user_id": 1})
+        if fac:
+            targets.append(fac.get("owner_user_id"))
+    dispatchers = await db.users.find({"role": "dispatcher"}, {"_id": 0, "id": 1}).to_list(100)
+    targets += [d["id"] for d in dispatchers]
+    await notify_users(targets, "job_returned", job["id"],
+                       "Delivery could not be completed — the driver is returning the item to the pickup facility.")
+
+@api_router.get("/notifications")
+async def get_notifications(current_user: dict = Depends(get_current_user)):
+    notes = await db.notifications.find({"user_id": current_user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
+    return {"notifications": notes, "unread": sum(1 for n in notes if not n.get("read"))}
+
+@api_router.put("/notifications/{notification_id}/read")
+async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
+    result = await db.notifications.update_one({"id": notification_id, "user_id": current_user["id"]}, {"$set": {"read": True}})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"status": "read"}
 
 @api_router.get("/jobs/{job_id}/custody-events")
 async def list_custody_events(job_id: str, current_user: dict = Depends(get_current_user)):
