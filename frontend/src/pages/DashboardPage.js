@@ -59,7 +59,7 @@ const DashboardPage = () => {
       
       setStats(statsRes.data);
       setAvailableJobs(availableRes.data.jobs.slice(0, 5));
-      setMyJobs(myJobsRes.data.jobs.filter(j => j.status === 'in_progress').slice(0, 3));
+      setMyJobs(myJobsRes.data.jobs.filter(j => ['accepted', 'in_progress', 'picked_up', 'in_transit'].includes(j.status)).slice(0, 3));
       setPermits(permitsRes.data.permits || {});
       setRequiredPermits(allPermitsRes.data.permits.filter(p => p.required));
       setBalance(balanceRes.data);
@@ -132,20 +132,20 @@ const DashboardPage = () => {
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4">
               {user?.role === 'admin' && (
                 <Badge className="bg-purple-100 text-purple-700" data-testid="dashboard-admin-badge">Admin</Badge>
               )}
               <ChangePasswordDialog token={token} />
               <Button variant="ghost" size="sm" onClick={handleLogout} data-testid="logout-btn">
-                <LogOut className="w-4 h-4 mr-2" /> Logout
+                <LogOut className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Logout</span>
               </Button>
             </div>
           </div>
         </div>
       </nav>
 
-      <main className="max-w-7xl mx-auto px-6 py-8">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 overflow-x-hidden">
         {/* Welcome Section */}
         <div className="mb-8">
           <h1 className="font-archivo font-bold text-3xl text-slate-900">
@@ -193,17 +193,17 @@ const DashboardPage = () => {
         {balance.owed > 0 && (
           <Card className="mb-8 border-amber-200 bg-amber-50" data-testid="dashboard-balance-alert">
             <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center">
+              <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className="w-12 h-12 bg-amber-100 rounded-full flex items-center justify-center shrink-0">
                     <AlertTriangle className="w-6 h-6 text-amber-600" />
                   </div>
-                  <div>
+                  <div className="min-w-0">
                     <h3 className="font-semibold text-slate-900">Outstanding Balance: ${balance.owed.toFixed(2)} CAD</h3>
                     <p className="text-slate-600 text-sm">Platform commission & cancellation fees pending</p>
                   </div>
                 </div>
-                <Button onClick={() => navigate('/billing')} className="bg-amber-600 hover:bg-amber-700" data-testid="pay-balance-cta-btn">
+                <Button onClick={() => navigate('/billing')} className="bg-amber-600 hover:bg-amber-700 shrink-0" data-testid="pay-balance-cta-btn">
                   Pay Balance <ArrowRight className="w-4 h-4 ml-2" />
                 </Button>
               </div>
@@ -307,7 +307,7 @@ const DashboardPage = () => {
 
         <div className="grid lg:grid-cols-3 gap-8">
           {/* Available Jobs */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 min-w-0">
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader className="flex flex-row items-center justify-between">
                 <CardTitle className="font-archivo text-xl">Available Jobs</CardTitle>
@@ -325,35 +325,37 @@ const DashboardPage = () => {
                 ) : (
                   <div className="space-y-4">
                     {availableJobs.map((job) => (
-                      <div key={job.id} className="job-row rounded-lg border border-slate-100">
-                        <div className="flex items-center justify-between">
-                          <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-2">
-                              <h3 className="font-semibold text-slate-900">{job.title}</h3>
+                      <div key={job.id} className="job-row rounded-lg border border-slate-100 p-3">
+                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-2 flex-wrap">
+                              <h3 className="font-semibold text-slate-900 truncate">{job.facility_name || job.title || 'Medical transport'}</h3>
                               <Badge className={getUrgencyBadge(job.urgency)}>
                                 {job.urgency}
                               </Badge>
-                              {job.temperature_controlled && (
+                              {(job.temperature_controlled || (job.handling_flags || []).includes('cold_chain')) && (
                                 <Badge variant="outline" className="text-blue-600 border-blue-200">
-                                  Temp Controlled
+                                  Cold Chain
                                 </Badge>
                               )}
                             </div>
-                            <div className="flex items-center gap-4 text-sm text-slate-500">
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-4 h-4" />
-                                {job.pickup_city} → {job.delivery_city}
+                            <div className="flex items-center gap-3 text-sm text-slate-500 flex-wrap">
+                              <span className="flex items-center gap-1 min-w-0">
+                                <MapPin className="w-4 h-4 shrink-0" />
+                                <span className="truncate">{job.pickup_area || job.pickup_city} → {job.dropoff_area || job.delivery_city}</span>
                               </span>
-                              <span>{job.estimated_distance_km} km</span>
+                              {(job.distance_km ?? job.estimated_distance_km) != null && (
+                                <span className="shrink-0">{job.distance_km ?? job.estimated_distance_km} km</span>
+                              )}
                             </div>
                           </div>
-                          <div className="text-right ml-4">
+                          <div className="flex sm:flex-col items-center sm:items-end justify-between gap-2 shrink-0">
                             <p className="font-archivo font-bold text-2xl text-slate-900">
-                              ${job.offered_price.toFixed(2)}
+                              ${Number(job.payout_amount ?? job.offered_price ?? 0).toFixed(2)}
                             </p>
                             <Button 
                               size="sm" 
-                              className="mt-2 bg-blue-600 hover:bg-blue-700 rounded-full"
+                              className="bg-blue-600 hover:bg-blue-700 rounded-full"
                               onClick={() => handleAcceptJob(job.id)}
                               data-testid={`accept-job-${job.id}-btn`}
                             >
@@ -370,7 +372,7 @@ const DashboardPage = () => {
           </div>
 
           {/* Sidebar */}
-          <div className="space-y-6">
+          <div className="space-y-6 min-w-0">
             {/* Active Deliveries */}
             <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)]">
               <CardHeader>
@@ -385,12 +387,14 @@ const DashboardPage = () => {
                 ) : (
                   <div className="space-y-3">
                     {myJobs.map((job) => (
-                      <div key={job.id} className="p-3 bg-blue-50 rounded-lg border border-blue-100">
-                        <p className="font-medium text-slate-900 text-sm">{job.title}</p>
+                      <div key={job.id} className="p-3 bg-blue-50 rounded-lg border border-blue-100" data-testid={`active-delivery-${job.id}`}>
+                        <p className="font-medium text-slate-900 text-sm">{job.title || 'Medical transport'}</p>
                         <p className="text-xs text-slate-500 mt-1">
-                          {job.pickup_city} → {job.delivery_city}
+                          {job.pickup_city || job.pickup_area} → {job.delivery_city || job.dropoff_area}
                         </p>
-                        <Badge className="mt-2 bg-blue-100 text-blue-700">In Progress</Badge>
+                        <Badge className="mt-2 bg-blue-100 text-blue-700">
+                          {{ accepted: 'Accepted', in_progress: 'In Progress', picked_up: 'Picked Up', in_transit: 'In Transit' }[job.status] || 'Active'}
+                        </Badge>
                       </div>
                     ))}
                   </div>

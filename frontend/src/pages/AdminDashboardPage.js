@@ -374,7 +374,7 @@ const AdminDashboardPage = () => {
                         <TableCell>
                           <Badge className={
                             j.status === 'open' ? 'bg-blue-100 text-blue-700' :
-                            j.status === 'in_progress' ? 'bg-amber-100 text-amber-700' :
+                            j.status === 'in_progress' || j.status === 'accepted' ? 'bg-amber-100 text-amber-700' :
                             j.status === 'completed' ? 'bg-emerald-100 text-emerald-700' :
                             'bg-slate-100 text-slate-700'
                           }>{j.status}</Badge>
@@ -726,6 +726,8 @@ const AdminDashboardPage = () => {
                   onChange={e => setEditJob({ ...editJob, status: e.target.value })}
                   data-testid="edit-job-status-select">
                   <option value="open">open</option>
+                  <option value="offered">offered</option>
+                  <option value="accepted">accepted</option>
                   <option value="in_progress">in_progress</option>
                   <option value="completed">completed</option>
                   <option value="cancelled">cancelled</option>

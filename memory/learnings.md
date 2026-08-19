@@ -6,6 +6,7 @@
 
 ## Visual-edits babel plugin
 - Crashes ("Cannot read properties of null (reading 'traverse')") on component-as-prop patterns traced across files (e.g. `icon={IconComponent}` passed into a shared page component). Keep pages self-contained or pass rendered JSX nodes, not component references.
+- PATCHED (June 2026): added null-guard at line ~876 of /app/frontend/plugins/visual-edits/babel-metadata-plugin.js (`importPath.parentPath?.parentPath || ...`). If builds crash again with this error after a plugin update, re-apply the guard. Also: rendering a destructured prop with a default (e.g. `{label}`) inside a wrapping element can trigger the same cross-file trace — prefer literals in shared components.
 
 ## Starlette request.headers caching
 - `request.headers` is cached on first access; injecting headers into `request.scope` afterwards does nothing. For query-token auth (`?auth=`), decode the JWT directly instead.

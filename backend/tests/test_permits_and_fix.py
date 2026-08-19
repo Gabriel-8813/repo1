@@ -163,7 +163,7 @@ class TestCancelJobOrderFix:
             # Driver attempts to cancel an OPEN job (not accepted) -> should be 400 now
             rc = requests.post(f"{API}/jobs/{job_id}/cancel", headers=driver_headers)
             assert rc.status_code == 400, f"expected 400 got {rc.status_code}: {rc.text}"
-            assert "in-progress" in rc.json().get("detail", "").lower() or "open" in rc.json().get("detail", "").lower()
+            assert "active" in rc.json().get("detail", "").lower() or "open" in rc.json().get("detail", "").lower()
         finally:
             # Cleanup: admin delete the job
             requests.delete(f"{API}/admin/jobs/{job_id}", headers=admin_headers)

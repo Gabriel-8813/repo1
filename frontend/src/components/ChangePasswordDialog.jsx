@@ -19,7 +19,7 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
  *  - size: Button size
  *  - label: optional override for the trigger label
  */
-export default function ChangePasswordDialog({ token, variant = 'ghost', size = 'sm', label = 'Change Password' }) {
+export default function ChangePasswordDialog({ token, variant = 'ghost', size = 'sm' }) {
   const [open, setOpen] = useState(false);
   const [current, setCurrent] = useState('');
   const [next, setNext] = useState('');
@@ -58,7 +58,7 @@ export default function ChangePasswordDialog({ token, variant = 'ghost', size = 
     <Dialog open={open} onOpenChange={(o) => { setOpen(o); if (!o) reset(); }}>
       <DialogTrigger asChild>
         <Button variant={variant} size={size} data-testid="change-password-trigger-btn">
-          <KeyRound className="w-4 h-4 mr-2" /> {label}
+          <KeyRound className="w-4 h-4 sm:mr-2" /> <span className="hidden sm:inline">Change Password</span>
         </Button>
       </DialogTrigger>
       <DialogContent className="max-w-md">
