@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { NotificationBell } from '../components/NotificationBell';
 import { Button } from '../components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -32,7 +33,7 @@ const STATUS_CLS = {
 };
 
 const emptyForm = {
-  pickup_address: '', recipient_name: '', dropoff_address: '', recipient_phone: '',
+  pickup_address: '', recipient_name: '', dropoff_address: '', recipient_phone: '', recipient_sms_consent: false,
   item_count: 1, item_category: 'prescription', handling_flags: [], special_instructions: '', requested_pickup_time: ''
 };
 
@@ -152,6 +153,7 @@ export default function FacilityHomePage() {
         </div>
         <div className="flex items-center gap-3">
           <span className="text-sm text-slate-600 hidden sm:block" data-testid="role-home-user-name">{facility?.name || user?.full_name}</span>
+          <NotificationBell />
           <Button variant="outline" size="sm" onClick={handleLogout} data-testid="role-home-logout-btn"><LogOut className="w-4 h-4 sm:mr-1" /><span className="hidden sm:inline">Sign out</span></Button>
         </div>
       </header>
@@ -206,6 +208,12 @@ export default function FacilityHomePage() {
                         <Input required value={form.recipient_phone} onChange={(e) => setForm({ ...form, recipient_phone: e.target.value })} className="mt-1" data-testid="recipient-phone-input" />
                       </div>
                     </div>
+                    <label className="flex items-start gap-2 bg-blue-50/60 border border-blue-100 rounded-lg px-3 py-2 cursor-pointer">
+                      <input type="checkbox" className="mt-0.5 accent-blue-600" checked={form.recipient_sms_consent} onChange={(e) => setForm({ ...form, recipient_sms_consent: e.target.checked })} data-testid="sms-consent-checkbox" />
+                      <span className="text-xs text-slate-600">
+                        <span className="font-semibold text-slate-800">Recipient has consented to SMS delivery updates.</span> Required by CASL — the recipient will receive status texts (driver assigned, out for delivery, delivered) and can reply STOP to opt out at any time.
+                      </span>
+                    </label>
                     <div>
                       <label className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Dropoff address</label>
                       <Input required placeholder="Street, city, ON" value={form.dropoff_address} onChange={(e) => setForm({ ...form, dropoff_address: e.target.value })} className="mt-1" data-testid="dropoff-address-input" />

@@ -18,6 +18,7 @@ import RatePage from "./pages/RatePage";
 import ForgotPasswordPage from "./pages/ForgotPasswordPage";
 import ResetPasswordPage from "./pages/ResetPasswordPage";
 import FacilityHomePage from "./pages/FacilityHomePage";
+import ConfirmDeliveryPage from "./pages/ConfirmDeliveryPage";
 import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
@@ -126,6 +127,7 @@ function AppRoutes() {
       <Route path="/" element={<LandingPage />} />
       <Route path="/tip/:jobId" element={<TipPage />} />
       <Route path="/rate/:jobId" element={<RatePage />} />
+      <Route path="/confirm/:token" element={<ConfirmDeliveryPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 

@@ -14,7 +14,7 @@ import {
 } from '../components/ui/alert-dialog';
 import {
   Truck, MapPin, Navigation, PackageCheck, PenLine, CreditCard,
-  CheckCircle2, Undo2, ArrowLeft, Snowflake, ShieldAlert, XCircle, Clock
+  CheckCircle2, Undo2, ArrowLeft, Snowflake, ShieldAlert, XCircle, Clock, Bell
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -45,6 +45,16 @@ export default function ActiveDeliveryPage() {
   const [gpsUnavailable, setGpsUnavailable] = useState(false);
   const [fees, setFees] = useState(null);
   const [nowTick, setNowTick] = useState(Date.now());
+  const [arrivingSent, setArrivingSent] = useState(false);
+  const sendArrivingSoon = async () => {
+    try {
+      const r = await axios.post(`${API}/jobs/${jobId}/arriving-soon`, {}, { headers });
+      setArrivingSent(true);
+      toast.success(r.data.status === 'skipped' ? 'No SMS sent (no consent or already notified)' : 'Recipient notified by SMS');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not notify recipient');
+    }
+  };
   const pingFailsRef = useRef(0);
 
   // Stage 1 checklist
@@ -409,10 +419,13 @@ export default function ActiveDeliveryPage() {
                 </div>
               </div>
               <a href={mapsUrl(job.delivery_address)} target="_blank" rel="noreferrer">
-                <Button variant="outline" className="w-full h-12 rounded-full mb-4" data-testid="navigate-dropoff-btn">
+                <Button variant="outline" className="w-full h-12 rounded-full mb-3" data-testid="navigate-dropoff-btn">
                   <Navigation className="w-4 h-4 mr-2" /> Navigate to dropoff
                 </Button>
               </a>
+              <Button variant="outline" className="w-full h-12 rounded-full mb-4 text-blue-700 border-blue-200 hover:bg-blue-50" disabled={arrivingSent} onClick={sendArrivingSoon} data-testid="arriving-soon-btn">
+                <Bell className="w-4 h-4 mr-2" /> {arrivingSent ? 'Recipient notified' : 'Notify recipient — arriving soon'}
+              </Button>
               <Button className="w-full h-14 rounded-full bg-blue-600 hover:bg-blue-700 text-base font-semibold" onClick={() => { setArrived(true); localStorage.setItem(`mt_arrived_${jobId}`, '1'); }} data-testid="arrived-btn">
                 Arrived at dropoff
               </Button>

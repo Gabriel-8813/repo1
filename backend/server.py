@@ -511,6 +511,149 @@ async def log_view_once(actor: dict, entity: str, entity_id: str):
     except Exception as e:
         logging.getLogger(__name__).error(f"View log failed: {e}")
 
+# ---- Notifications & SMS (CASL-compliant) ----
+SMS_OPTOUT_FOOTER = " Reply STOP to opt out."
+
+def normalize_phone(p: Optional[str]) -> Optional[str]:
+    if not p:
+        return None
+    digits = re.sub(r"[^\d+]", "", p)
+    if digits.startswith("+"):
+        return digits if len(digits) >= 11 else None
+    if len(digits) == 10:
+        return f"+1{digits}"
+    if len(digits) == 11 and digits.startswith("1"):
+        return f"+{digits}"
+    return None
+
+async def send_sms(to_phone: str, body: str, job_id: Optional[str] = None, kind: str = "generic") -> dict:
+    norm = normalize_phone(to_phone)
+    rec = {
+        "id": str(uuid.uuid4()),
+        "to_phone": norm or to_phone,
+        "body": body + SMS_OPTOUT_FOOTER,
+        "job_id": job_id,
+        "kind": kind,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    if not norm:
+        rec["status"] = "skipped_invalid_number"
+    elif await db.sms_optouts.find_one({"phone": norm}):
+        rec["status"] = "blocked_optout"
+    else:
+        sid = os.environ.get("TWILIO_ACCOUNT_SID")
+        tok = os.environ.get("TWILIO_AUTH_TOKEN")
+        from_num = os.environ.get("TWILIO_PHONE_NUMBER")
+        if sid and tok and from_num:
+            try:
+                from twilio.rest import Client as TwilioClient
+                msg = await asyncio.to_thread(
+                    lambda: TwilioClient(sid, tok).messages.create(to=norm, from_=from_num, body=rec["body"]))
+                rec["status"] = "sent"
+                rec["twilio_sid"] = msg.sid
+            except Exception as e:
+                rec["status"] = "failed"
+                rec["error"] = str(e)[:300]
+        else:
+            rec["status"] = "dev_outbox"
+    await db.sms_outbox.insert_one(rec)
+    rec.pop("_id", None)
+    return rec
+
+SMS_KINDS = {
+    "assigned": "MediTrans: A courier has been assigned to your delivery from {facility}. We'll keep you updated by text.",
+    "out_for_delivery": "MediTrans: Your delivery from {facility} is out for delivery.",
+    "arriving": "MediTrans: Your courier is arriving soon with your delivery from {facility}. Please be available to sign.",
+    "delivered": "MediTrans: Your delivery from {facility} was delivered. Confirm receipt & rate your courier: {link}"
+}
+
+async def send_recipient_sms(job: dict, kind: str, link: Optional[str] = None):
+    """Sends a recipient status SMS once per kind, only with CASL consent."""
+    try:
+        if not job.get("recipient_sms_consent") or not job.get("recipient_phone"):
+            return None
+        if job.get("recipient_phone") == REDACTED:
+            return None
+        if (job.get("sms_flags") or {}).get(kind):
+            return None
+        facility_name = "your healthcare provider"
+        if job.get("facility_id"):
+            fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "name": 1})
+            if fac:
+                facility_name = fac["name"]
+        body = SMS_KINDS[kind].format(facility=facility_name, link=link or "")
+        rec = await send_sms(job["recipient_phone"], body, job_id=job["id"], kind=kind)
+        await db.jobs.update_one({"id": job["id"]}, {"$set": {f"sms_flags.{kind}": True}})
+        return rec
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Recipient SMS failed: {e}")
+        return None
+
+async def notify_user(user_id: str, ntype: str, title: str, body: str, job_id: Optional[str] = None, meta: Optional[dict] = None):
+    if not user_id:
+        return
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": user_id,
+        "type": ntype,
+        "title": title,
+        "body": body,
+        "job_id": job_id,
+        "meta": meta or {},
+        "read": False,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.notifications.insert_one(doc)
+
+async def notify_dispatchers(ntype: str, title: str, body: str, job_id: Optional[str] = None, meta: Optional[dict] = None):
+    staff = await db.users.find({"role": {"$in": ["dispatcher", "admin"]}}, {"_id": 0, "id": 1}).to_list(100)
+    for u in staff:
+        await notify_user(u["id"], ntype, title, body, job_id, meta)
+
+async def notify_facility_owner(job: dict, ntype: str, title: str, body: str):
+    targets = set()
+    if job.get("posted_by"):
+        targets.add(job["posted_by"])
+    if job.get("facility_id"):
+        fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "owner_user_id": 1})
+        if fac and fac.get("owner_user_id"):
+            targets.add(fac["owner_user_id"])
+    for t in targets:
+        await notify_user(t, ntype, title, body, job.get("id"))
+
+STALE_THRESHOLDS_MIN = {"open": 30, "offered": 30, "accepted": 20, "picked_up": 30, "in_transit": 90}
+
+async def stale_job_sweep():
+    now = datetime.now(timezone.utc)
+    jobs = await db.jobs.find({"status": {"$in": list(STALE_THRESHOLDS_MIN.keys())}}, {"_id": 0}).to_list(2000)
+    for j in jobs:
+        status = j["status"]
+        since = j.get("offered_at") if status == "offered" else \
+            j.get("picked_up_at") if status in ("picked_up", "in_transit") else \
+            j.get("accepted_at") if status == "accepted" else j.get("created_at")
+        if not since:
+            continue
+        try:
+            mins = (now - datetime.fromisoformat(since)).total_seconds() / 60
+        except ValueError:
+            continue
+        if mins < STALE_THRESHOLDS_MIN[status]:
+            continue
+        existing = await db.notifications.find_one({"type": "stale_job", "meta.job_id": j["id"], "meta.status": status}, {"_id": 1})
+        if existing:
+            continue
+        title = f"Job stuck in {status.replace('_', ' ')}"
+        body = f"'{j.get('title') or 'Medical transport'}' has been {status.replace('_', ' ')} for {int(mins)} min."
+        await notify_dispatchers("stale_job", title, body, j["id"], meta={"job_id": j["id"], "status": status})
+
+async def stale_sweep_loop():
+    while True:
+        try:
+            await stale_job_sweep()
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Stale sweep failed: {e}")
+        await asyncio.sleep(300)
+
 def insurance_flag_of(insurance_expiry: Optional[str]) -> Optional[str]:
     """Returns 'expired', 'expiring_soon' (<=30 days) or None."""
     if not insurance_expiry:
@@ -1637,6 +1780,9 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     )
     await log_audit(current_user, "accept", "job", job_id)
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    await send_recipient_sms(updated_job, "assigned")
+    await notify_facility_owner(updated_job, "driver_assigned", "Driver assigned",
+                                f"{current_user.get('full_name', 'A courier')} accepted '{updated_job.get('title') or 'your delivery'}'.")
     return {"job": scoped_job(updated_job, current_user)}
 
 @api_router.post("/jobs/{job_id}/decline")
@@ -1692,6 +1838,10 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
         }}
     )
     await log_audit(current_user, "cancel", "job", job_id)
+    await notify_dispatchers("driver_cancelled", "Driver cancelled a job",
+                             f"{current_user.get('full_name', 'A driver')} cancelled '{job.get('title') or 'a delivery'}'{' (late fee charged)' if charged else ''}.", job_id)
+    await notify_facility_owner(job, "driver_cancelled", "Courier cancelled",
+                                f"The courier cancelled '{job.get('title') or 'your delivery'}'. It is back in the job pool.")
     
     ledger_entry = None
     if charged:
@@ -2281,6 +2431,33 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
     await db.jobs.update_one({"id": job_id}, {"$set": updates})
     await log_audit(current_user, "update", "job", job_id)
     updated = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    try:
+        driver_changed = bool(updates.get("assigned_driver_id")) and updates["assigned_driver_id"] != job.get("assigned_driver_id")
+        if updated.get("status") == "offered" and updated.get("assigned_driver_id") and (new_status == "offered" or driver_changed):
+            await notify_user(updated["assigned_driver_id"], "job_offer", "New job offer",
+                              f"You've been offered '{updated.get('title') or 'a delivery'}' — ${float(updated.get('payout_amount') or 0):.2f}. Open Jobs to accept.", job_id)
+        if new_status and new_status != job.get("status"):
+            if new_status == "accepted":
+                await send_recipient_sms(updated, "assigned")
+            elif new_status in ("picked_up", "in_transit"):
+                await send_recipient_sms(updated, "out_for_delivery")
+            elif new_status == "delivered":
+                token = updated.get("confirm_token") or str(uuid.uuid4())
+                await db.jobs.update_one({"id": job_id}, {"$set": {"confirm_token": token}})
+                link = f"{os.environ.get('RESET_LINK_BASE_URL', '')}/confirm/{token}"
+                await send_recipient_sms(updated, "delivered", link=link)
+                await notify_facility_owner(updated, "delivered", "Delivery completed",
+                                            f"'{updated.get('title') or 'Your delivery'}' was marked delivered.")
+            elif new_status == "cancelled":
+                if updated.get("assigned_driver_id"):
+                    await notify_user(updated["assigned_driver_id"], "job_cancelled", "Job cancelled",
+                                      f"'{updated.get('title') or 'A delivery'}' was cancelled by dispatch.", job_id)
+                await notify_dispatchers("job_cancelled", "Job cancelled",
+                                         f"'{updated.get('title') or 'A delivery'}' was cancelled.", job_id)
+                await notify_facility_owner(updated, "job_cancelled", "Delivery cancelled",
+                                            f"'{updated.get('title') or 'Your delivery'}' was cancelled.")
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Job update notifications failed: {e}")
     return scoped_job(updated, current_user)
 
 @api_router.delete("/jobs/{job_id}")
@@ -2373,9 +2550,13 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
 
     settlement = None
     new_status = status
+    fresh = {**job, "id": job_id}
     if et == "pickup_confirmed":
         new_status = "picked_up"
         await db.jobs.update_one({"id": job_id}, {"$set": {"status": "picked_up", "picked_up_at": doc["timestamp"]}})
+        await send_recipient_sms(fresh, "out_for_delivery")
+        await notify_facility_owner(fresh, "picked_up", "Package picked up",
+                                    f"'{job.get('title') or 'Your delivery'}' is out for delivery.")
     elif et == "in_transit_ping" and status == "picked_up":
         new_status = "in_transit"
         await db.jobs.update_one({"id": job_id}, {"$set": {"status": "in_transit"}})
@@ -2383,10 +2564,21 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         driver_id = job.get("assigned_driver_id") or job.get("accepted_by") or current_user["id"]
         settlement = await settle_job_completion(job, driver_id, "delivered")
         new_status = "delivered"
+        token = job.get("confirm_token") or str(uuid.uuid4())
+        await db.jobs.update_one({"id": job_id}, {"$set": {"confirm_token": token}})
+        link = f"{os.environ.get('RESET_LINK_BASE_URL', '')}/confirm/{token}"
+        await send_recipient_sms(fresh, "delivered", link=link)
+        await notify_facility_owner(fresh, "delivered", "Delivery completed",
+                                    f"'{job.get('title') or 'Your delivery'}' was delivered to {payload.recipient_name or 'the recipient'}.")
     elif et == "returned":
         new_status = "returned"
         await db.jobs.update_one({"id": job_id}, {"$set": {"status": "returned"}})
         await notify_job_return(job)
+        await notify_dispatchers("job_returned", "Delivery returned",
+                                 f"'{job.get('title') or 'A delivery'}' was returned to the facility.", job_id)
+    elif et in ("delivery_attempted", "exception"):
+        await notify_dispatchers("job_exception", "Delivery exception",
+                                 f"'{job.get('title') or 'A delivery'}': {et.replace('_', ' ')} — {payload.notes or 'no notes'}.", job_id)
 
     return {**doc, "job_status": new_status, "settlement": settlement}
 
@@ -2465,13 +2657,15 @@ async def serve_delivery_evidence(evidence_id: str, request: Request, auth: Opti
     return Response(content=data, media_type=ev.get("content_type") or ct)
 
 # ---- Notifications ----
-async def notify_users(user_ids, type_: str, job_id: str, message: str):
+async def notify_users(user_ids, type_: str, job_id: str, message: str, title: Optional[str] = None):
     now = datetime.now(timezone.utc).isoformat()
     docs = [{
         "id": str(uuid.uuid4()),
         "user_id": uid,
         "type": type_,
         "job_id": job_id,
+        "title": title or type_.replace("_", " ").capitalize(),
+        "body": message,
         "message": message,
         "read": False,
         "created_at": now
@@ -2485,15 +2679,9 @@ async def notify_job_return(job: dict):
         fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "owner_user_id": 1})
         if fac:
             targets.append(fac.get("owner_user_id"))
-    dispatchers = await db.users.find({"role": "dispatcher"}, {"_id": 0, "id": 1}).to_list(100)
-    targets += [d["id"] for d in dispatchers]
     await notify_users(targets, "job_returned", job["id"],
-                       "Delivery could not be completed — the driver is returning the item to the pickup facility.")
-
-@api_router.get("/notifications")
-async def get_notifications(current_user: dict = Depends(get_current_user)):
-    notes = await db.notifications.find({"user_id": current_user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(50)
-    return {"notifications": notes, "unread": sum(1 for n in notes if not n.get("read"))}
+                       "Delivery could not be completed — the driver is returning the item to the pickup facility.",
+                       title="Delivery returned")
 
 @api_router.put("/notifications/{notification_id}/read")
 async def mark_notification_read(notification_id: str, current_user: dict = Depends(get_current_user)):
@@ -2831,6 +3019,7 @@ class FacilityRequestCreate(BaseModel):
     handling_flags: List[str] = []
     special_instructions: Optional[str] = None  # non-clinical handling notes only
     requested_pickup_time: str
+    recipient_sms_consent: bool = False
     facility_id: Optional[str] = None
 
 CATEGORY_TITLES = {
@@ -2935,9 +3124,10 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
         "item_count": payload.item_count,
         "recipient_name": payload.recipient_name,
         "recipient_phone": payload.recipient_phone,
+        "recipient_sms_consent": bool(payload.recipient_sms_consent),
         "requested_pickup_time": payload.requested_pickup_time,
         "distance_estimated": distance is not None,
-        "status": "offered",
+        "status": "open",
         "posted_by": current_user["id"],
         "accepted_by": None,
         "assigned_driver_id": None,
@@ -3640,6 +3830,135 @@ async def compliance_breach_report(date_from: str, date_to: str, format: Optiona
                         headers={"Content-Disposition": f"attachment; filename=breach-report-{date_from}-{date_to}.csv"})
     return {"summary": summary, "records": records}
 
+# ---- Notifications, SMS webhook & public delivery confirmation ----
+@api_router.get("/notifications")
+async def my_notifications(limit: int = 30, current_user: dict = Depends(get_current_user)):
+    notifs = await db.notifications.find({"user_id": current_user["id"]}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 100))
+    unread = await db.notifications.count_documents({"user_id": current_user["id"], "read": False})
+    return {"notifications": notifs, "unread": unread}
+
+class MarkReadPayload(BaseModel):
+    ids: Optional[List[str]] = None
+    all: bool = False
+
+@api_router.post("/notifications/read")
+async def mark_notifications_read(payload: MarkReadPayload, current_user: dict = Depends(get_current_user)):
+    query = {"user_id": current_user["id"]}
+    if not payload.all:
+        if not payload.ids:
+            raise HTTPException(status_code=422, detail="Provide ids or all=true")
+        query["id"] = {"$in": payload.ids}
+    r = await db.notifications.update_many(query, {"$set": {"read": True}})
+    return {"marked": r.modified_count}
+
+@api_router.post("/jobs/{job_id}/arriving-soon")
+async def arriving_soon(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if current_user.get("role") == "driver" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+        raise HTTPException(status_code=403, detail="Only the assigned driver can send this")
+    if current_user.get("role") == "facility":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    if job.get("status") not in ("picked_up", "in_transit"):
+        raise HTTPException(status_code=400, detail="Job is not out for delivery")
+    rec = await send_recipient_sms(job, "arriving")
+    if rec is None:
+        return {"status": "skipped", "reason": "no consent, no phone, or already sent"}
+    return {"status": rec["status"]}
+
+@api_router.post("/sms/twilio-webhook")
+async def twilio_inbound_webhook(request: Request):
+    form = await request.form()
+    from_phone = normalize_phone(form.get("From", ""))
+    body = (form.get("Body") or "").strip().upper()
+    if from_phone:
+        if body in ("STOP", "STOPALL", "UNSUBSCRIBE", "CANCEL", "END", "QUIT"):
+            await db.sms_optouts.update_one(
+                {"phone": from_phone},
+                {"$set": {"phone": from_phone, "source": "sms_reply", "created_at": datetime.now(timezone.utc).isoformat()}},
+                upsert=True)
+        elif body in ("START", "UNSTOP", "YES"):
+            await db.sms_optouts.delete_one({"phone": from_phone})
+    return Response(content="<?xml version=\"1.0\" encoding=\"UTF-8\"?><Response></Response>", media_type="application/xml")
+
+@api_router.get("/public/confirm/{token}")
+async def public_confirm_info(token: str):
+    job = await db.jobs.find_one({"confirm_token": token}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Invalid or expired confirmation link")
+    facility = await db.facilities.find_one({"id": job.get("facility_id")}, {"_id": 0, "name": 1}) if job.get("facility_id") else None
+    did = job.get("accepted_by") or job.get("assigned_driver_id")
+    driver = await db.users.find_one({"id": did}, {"_id": 0, "full_name": 1}) if did else None
+    reviewed = bool(await db.reviews.find_one({"job_id": job["id"]}, {"_id": 1}))
+    return {
+        "title": job.get("title") or "Medical transport",
+        "facility_name": (facility or {}).get("name") or "Your healthcare provider",
+        "driver_first_name": (driver or {}).get("full_name", "").split(" ")[0] or "Your courier",
+        "delivered_at": job.get("delivered_at") or job.get("completed_at"),
+        "confirmed_at": job.get("recipient_confirmed_at"),
+        "already_reviewed": reviewed
+    }
+
+class PublicConfirmPayload(BaseModel):
+    rating: Optional[int] = Field(default=None, ge=1, le=5)
+    comment: Optional[str] = None
+
+@api_router.post("/public/confirm/{token}")
+async def public_confirm_delivery(token: str, payload: PublicConfirmPayload):
+    job = await db.jobs.find_one({"confirm_token": token}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Invalid or expired confirmation link")
+    now = datetime.now(timezone.utc).isoformat()
+    if not job.get("recipient_confirmed_at"):
+        await db.jobs.update_one({"id": job["id"]}, {"$set": {"recipient_confirmed_at": now}})
+        await notify_facility_owner(job, "recipient_confirmed", "Recipient confirmed delivery",
+                                    f"The recipient confirmed receipt of '{job.get('title') or 'the delivery'}'.")
+    rating_saved = False
+    did = job.get("accepted_by") or job.get("assigned_driver_id")
+    if payload.rating and did and not await db.reviews.find_one({"job_id": job["id"]}, {"_id": 1}):
+        await db.reviews.insert_one({
+            "id": str(uuid.uuid4()),
+            "job_id": job["id"],
+            "driver_id": did,
+            "rating": int(payload.rating),
+            "comment": (payload.comment or "").strip()[:2000] or None,
+            "reviewer_name": "Delivery recipient",
+            "source": "recipient",
+            "hidden": False,
+            "created_at": now
+        })
+        rating_saved = True
+    return {"confirmed": True, "rating_saved": rating_saved}
+
+@api_router.get("/admin/sms-outbox")
+async def admin_sms_outbox(limit: int = 100, staff: dict = Depends(require_staff)):
+    msgs = await db.sms_outbox.find({}, {"_id": 0}).sort("created_at", -1).to_list(min(limit, 500))
+    optouts = await db.sms_optouts.find({}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"messages": msgs, "optouts": optouts,
+            "twilio_configured": bool(os.environ.get("TWILIO_ACCOUNT_SID") and os.environ.get("TWILIO_AUTH_TOKEN") and os.environ.get("TWILIO_PHONE_NUMBER"))}
+
+class OptoutPayload(BaseModel):
+    phone: str
+    action: str  # add | remove
+
+@api_router.post("/admin/sms-optouts")
+async def admin_manage_optout(payload: OptoutPayload, admin: dict = Depends(require_admin)):
+    norm = normalize_phone(payload.phone)
+    if not norm:
+        raise HTTPException(status_code=422, detail="Invalid phone number")
+    if payload.action == "add":
+        await db.sms_optouts.update_one(
+            {"phone": norm},
+            {"$set": {"phone": norm, "source": "admin", "created_at": datetime.now(timezone.utc).isoformat()}},
+            upsert=True)
+    elif payload.action == "remove":
+        await db.sms_optouts.delete_one({"phone": norm})
+    else:
+        raise HTTPException(status_code=422, detail="action must be 'add' or 'remove'")
+    await log_audit(admin, "update", "sms_optout", norm, details={"action": payload.action})
+    return {"phone": norm, "action": payload.action}
+
 @api_router.get("/dispatch/board")
 async def dispatch_board(staff: dict = Depends(require_staff)):
     jobs = await db.jobs.find({}, {"_id": 0}).sort("created_at", -1).to_list(300)
@@ -3728,6 +4047,8 @@ async def startup_event():
     await db.driver_documents.create_index([("user_id", 1), ("doc_type", 1)])
     # Daily data-retention purge (compliance)
     asyncio.create_task(retention_purge_loop())
+    # Stuck-job dispatcher alerts (every 5 min)
+    asyncio.create_task(stale_sweep_loop())
     # Init object storage for driver documents
     try:
         await asyncio.to_thread(init_storage)

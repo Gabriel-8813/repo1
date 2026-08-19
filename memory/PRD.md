@@ -237,6 +237,14 @@ Build an app for medical transportation that people can register and pay a month
 - Tested: iteration 19 (37/37 backend after fixes, frontend 100%); DB cleaned (569 duplicate view rows, 6 zero-purge audit spam)
 - Backlog notes from review: ?auth= JWT in download URLs (app-wide pattern) → short-lived tokens later; missing-pod/breach scans unpaginated; CORS wildcard; login lockout
 
+### Real-time Notifications & Recipient SMS (June 2026)
+- **Recipient SMS (DEV-MODE OUTBOX — MOCKED, Twilio-ready)**: assigned / out_for_delivery / arriving (driver button) / delivered (+ /confirm/{token} link); CASL: consent checkbox at booking, 'Reply STOP to opt out.' footer, opt-out list checked pre-send, POST /api/sms/twilio-webhook honors STOP/START, sms_flags per-kind dedupe; enable real Twilio via TWILIO_ACCOUNT_SID/AUTH_TOKEN/PHONE_NUMBER env
+- **Public delivery confirmation** /confirm/{token}: recipient confirms receipt + optional 1-5 star rating (creates review, one per job), facility notified
+- **In-app notifications**: db.notifications + GET /api/notifications + POST /read; NotificationBell (15s poll, toasts, browser Notification API) in admin/dispatch/facility/driver headers; drivers get job offers (incl. assignment to already-open pool jobs)/cancellations; facilities get lifecycle events; dispatchers+admins get exceptions/returns/cancels + stale-job sweep (5 min loop, thresholds open/offered 30m, accepted 20m, picked_up 30m, in_transit 90m, deduped)
+- **Structural fix**: facility bookings now created status 'open' (was 'offered' with no driver — fixed offer semantics + masking test)
+- **Admin Compliance tab**: SMS outbox table with dev/live badge + opt-out management (audited)
+- Tested: iteration 20 — 23-test suite + full regression; HIGH bug (missing job_offer on pool assignment) + blank legacy notifications + duplicate route fixed and re-verified (45/45 pytest)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

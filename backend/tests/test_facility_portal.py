@@ -73,7 +73,7 @@ class TestFacilityRequestCreate:
         j = r.json()
         created_jobs.append(j["id"])
         assert "_id" not in j
-        assert j["status"] == "offered"
+        assert j["status"] == "open"
         assert j["assigned_driver_id"] is None
         assert FACILITY_ADDRESS_HINT.lower() in (j["pickup_address"] or "").lower(), j["pickup_address"]
         assert j["delivery_address"] == "200 Elizabeth St, Toronto, ON"
@@ -207,9 +207,9 @@ class TestDriverMaskingAndAccept:
         av2 = requests.get(f"{API}/jobs/available", headers=hdr(driver_token), timeout=60)
         assert not any(j["id"] == jid for j in av2.json()["jobs"]), "declined job still in driver queue"
 
-        # status unchanged (still offered) — verify as facility owner
+        # status unchanged (still in the open pool) — verify as facility owner
         fac = requests.get(f"{API}/jobs/{jid}", headers=hdr(login(FACILITY)), timeout=60)
         assert fac.status_code == 200
         fj = fac.json().get("job", fac.json())
-        assert fj["status"] == "offered", fj["status"]
+        assert fj["status"] == "open", fj["status"]
         assert fj["assigned_driver_id"] is None
