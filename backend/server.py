@@ -301,6 +301,7 @@ HANDLING_FLAGS = {"cold_chain", "controlled_substance", "fragile", "urgent", "si
 JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed", "in_progress"}
 DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected"}
 COMPLIANCE_STATUSES = {"not_submitted", "pending", "valid", "expired", "rejected"}
+CUSTODY_EVENT_TYPES = {"pickup_confirmed", "in_transit_ping", "delivery_attempted", "delivered", "returned", "exception"}
 
 class MarketplaceUserCreate(BaseModel):
     name: str
@@ -384,6 +385,15 @@ def validate_handling_flags(flags):
         bad = set(flags) - HANDLING_FLAGS
         if bad:
             raise HTTPException(status_code=422, detail=f"Invalid handling_flags {sorted(bad)}. Allowed: {sorted(HANDLING_FLAGS)}")
+
+class CustodyEventCreate(BaseModel):
+    event_type: str
+    gps_lat: Optional[float] = Field(default=None, ge=-90, le=90)
+    gps_lng: Optional[float] = Field(default=None, ge=-180, le=180)
+    evidence_url: Optional[str] = None
+    recipient_name: Optional[str] = None
+    recipient_relationship: Optional[str] = None
+    notes: Optional[str] = None
 
 # Auth helpers
 def hash_password(password: str) -> str:
@@ -1954,6 +1964,72 @@ async def delete_job(job_id: str, current_user: dict = Depends(get_current_user)
     await log_audit(current_user, "delete", "job", job_id)
     return {"status": "deleted", "job_id": job_id}
 
+# ---- Chain of custody (legal, append-only) ----
+async def assert_job_access(job: dict, user: dict):
+    role = user.get("role")
+    if role in STAFF_ROLES:
+        return
+    if role == "facility":
+        fac_ids = await facility_ids_owned_by(user["id"])
+        if job.get("posted_by") != user["id"] and job.get("facility_id") not in fac_ids:
+            raise HTTPException(status_code=403, detail="Not authorized")
+    else:
+        if user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+            raise HTTPException(status_code=403, detail="Not authorized")
+
+@api_router.post("/jobs/{job_id}/custody-events", status_code=201)
+async def create_custody_event(job_id: str, payload: CustodyEventCreate, current_user: dict = Depends(get_current_user)):
+    validate_enum(payload.event_type, CUSTODY_EVENT_TYPES, "event_type")
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    role = current_user.get("role")
+    if role == "facility":
+        raise HTTPException(status_code=403, detail="Only the assigned driver or staff can record custody events")
+    if role == "driver" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+        raise HTTPException(status_code=403, detail="Only the assigned driver can record custody events for this job")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "job_id": job_id,
+        **payload.model_dump(),
+        "actor_id": current_user["id"],
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    await db.custody_events.insert_one(doc)
+    await log_audit(current_user, "create", "custody_event", doc["id"])
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/jobs/{job_id}/custody-events")
+async def list_custody_events(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    await assert_job_access(job, current_user)
+    events = await db.custody_events.find({"job_id": job_id}, {"_id": 0}).sort("timestamp", 1).to_list(1000)
+    return {"custody_events": events, "count": len(events)}
+
+@api_router.get("/custody-events/{event_id}")
+async def get_custody_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    event = await db.custody_events.find_one({"id": event_id}, {"_id": 0})
+    if not event:
+        raise HTTPException(status_code=404, detail="Custody event not found")
+    job = await db.jobs.find_one({"id": event["job_id"]}, {"_id": 0})
+    if job:
+        await assert_job_access(job, current_user)
+    elif current_user.get("role") not in STAFF_ROLES:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    return event
+
+@api_router.put("/custody-events/{event_id}")
+@api_router.patch("/custody-events/{event_id}")
+async def update_custody_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    raise HTTPException(status_code=405, detail="Custody events are append-only and cannot be modified")
+
+@api_router.delete("/custody-events/{event_id}")
+async def delete_custody_event(event_id: str, current_user: dict = Depends(get_current_user)):
+    raise HTTPException(status_code=405, detail="Custody events are append-only and cannot be deleted")
+
 # ---- Audit logs (compliance) ----
 @api_router.get("/audit-logs")
 async def get_audit_logs(
@@ -2032,6 +2108,9 @@ async def startup_event():
     await db.jobs.create_index("assigned_driver_id")
     await db.jobs.create_index("posted_by")
     await db.jobs.create_index("facility_id")
+    # Custody chain indexes
+    await db.custody_events.create_index("job_id")
+    await db.custody_events.create_index("timestamp")
     # Auto-promote admin if ADMIN_EMAIL user already exists
     if ADMIN_EMAIL:
         await db.users.update_one(
