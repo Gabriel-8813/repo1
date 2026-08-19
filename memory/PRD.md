@@ -143,6 +143,15 @@ Build an app for medical transportation that people can register and pay a month
 - Every custody-event creation is also written to the audit log (entity=custody_event). Indexes on job_id + timestamp
 - **Tested**: 13/13 curl smoke checks + 30/30 RBAC regression suite re-run — zero issues
 
+### Driver Onboarding & Verification (June 2026)
+- **Mobile-first /onboarding checklist** (OnboardingPage.js): 7 credentials — driver's licence, vehicle registration + plate (plate text input), CVOR, TDG certificate, vulnerable sector check, commercial insurance (expiry date required, min $2M label), optional cold-chain cert ("unlocks cold-chain jobs"). Status badges missing/pending/approved/rejected, rejection reasons shown, Replace re-upload, progress bar, blue "Verification in progress" holding banner once all 6 required are in; polls every 15s and auto-redirects to /dashboard on approval
+- **Gating**: unapproved drivers (verification_status ≠ approved) are redirected from /dashboard and /jobs to /onboarding (VerifiedDriverRoute); roleHome sends them to /onboarding on login/register; /auth/me + login/register responses now include verification_status
+- **Storage**: Emergent Object Storage (initialized at startup via EMERGENT_LLM_KEY in backend/.env). Upload rules: JPG/PNG/WEBP/HEIC/PDF, 10MB max. Endpoints: GET /api/driver/onboarding, POST /api/driver/documents/{doc_type} (multipart; insurance_expiry + vehicle_plate form fields), GET /api/driver-documents/{id}/file (owner or staff; supports ?auth= token for browser viewing)
+- **Auto-transition**: verification_status incomplete→pending_review when all required docs submitted; doc review syncs drivers compliance fields (valid/rejected) and cold_chain_certified
+- **Admin "Drivers" tab** (DriverVerificationTab.jsx): per-driver rows with doc chips, view/approve/reject (reject dialog with notes), Approve/Reject Driver, revoke to review. Staff (admin+dispatcher) endpoints: GET /api/admin/driver-verifications, PUT /api/admin/driver-documents/{id}, PUT /api/admin/driver-verifications/{user_id}
+- **Hardening after review**: server-side guard blocks overall approval while required docs are missing/rejected (400); user deletion cascades driver record + documents + storage blobs; every upload/view/review audit-logged
+- **Tested**: iteration_10 — 18/18 onboarding pytest + 30/30 RBAC + full Playwright E2E (mobile 390px), all passed. Full backend suite now 126/126 (stale pre-pivot test_admin.py quarantined to tests_legacy/ — it mutated driver1's role and tested removed /admin/plans; commission tests updated to post jobs as admin since drivers can no longer POST /jobs)
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

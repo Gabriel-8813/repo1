@@ -15,6 +15,12 @@ Notes: Any user created with the email in `ADMIN_EMAIL` (backend/.env) is auto-p
 - Has an approved driver record in `db.drivers` (verification_status=approved) so it CAN accept jobs.
 - Home: `/dashboard`
 
+## Unverified Driver (onboarding testing)
+- Email: `newdriver@test.com`
+- Password: `NewDriver@123`
+- Role: `driver`, verification_status: `incomplete`
+- Lands on `/onboarding`; blocked from /dashboard and /jobs until an admin/dispatcher approves via Admin → Drivers tab.
+
 ## Facility (test user)
 - Email: `facility1@test.com`
 - Password: `Facility@123`

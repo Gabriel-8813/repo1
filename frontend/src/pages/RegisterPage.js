@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { useAuth } from '../context/AuthContext';
+import { useAuth, roleHome } from '../context/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -44,9 +44,9 @@ const RegisterPage = () => {
     setLoading(true);
 
     try {
-      await register(formData.email, formData.password, formData.full_name, formData.phone);
+      const userData = await register(formData.email, formData.password, formData.full_name, formData.phone);
       toast.success('Registration successful! Welcome to MediTrans.');
-      navigate('/dashboard');
+      navigate(roleHome(userData));
     } catch (err) {
       setError(err.response?.data?.detail || 'Registration failed. Please try again.');
     } finally {

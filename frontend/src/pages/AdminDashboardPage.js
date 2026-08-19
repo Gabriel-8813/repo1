@@ -24,9 +24,10 @@ import {
 import {
   Shield, Truck, Users, Briefcase, DollarSign, Settings, LogOut,
   Trash2, Pencil, TrendingUp, AlertCircle, Crown, Percent, Receipt,
-  FileText, Plus, Star, EyeOff
+  FileText, Plus, Star, EyeOff, ShieldCheck
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { DriverVerificationTab } from '../components/DriverVerificationTab';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -276,6 +277,7 @@ const AdminDashboardPage = () => {
         <Tabs defaultValue="users" className="w-full">
           <TabsList className="mb-6">
             <TabsTrigger value="users" data-testid="tab-users"><Users className="w-4 h-4 mr-2" />Users</TabsTrigger>
+            <TabsTrigger value="drivers" data-testid="tab-drivers"><ShieldCheck className="w-4 h-4 mr-2" />Drivers</TabsTrigger>
             <TabsTrigger value="jobs" data-testid="tab-jobs"><Briefcase className="w-4 h-4 mr-2" />Jobs</TabsTrigger>
             <TabsTrigger value="fees" data-testid="tab-fees"><Settings className="w-4 h-4 mr-2" />Fees & Commission</TabsTrigger>
             <TabsTrigger value="permits" data-testid="tab-permits"><FileText className="w-4 h-4 mr-2" />Permits</TabsTrigger>
@@ -341,6 +343,10 @@ const AdminDashboardPage = () => {
                 </Table>
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="drivers">
+            <DriverVerificationTab />
           </TabsContent>
 
           <TabsContent value="jobs">

@@ -1,0 +1,45 @@
+{
+  "summary": "Full E2E test of the new mobile-first driver onboarding feature. Backend: created /app/backend/tests/test_driver_onboarding.py (18 tests, all passing) covering onboarding state, upload validation (invalid doc_type/mime/missing insurance_expiry -> 422), full lifecycle (6 uploads -> pending_review), storage file roundtrip (owner header + staff ?auth= token, 401 bad token, 403 other driver/facility, 404 unknown doc), dispatcher-token staff endpoints (review doc + set verification), 403 for driver/facility on all staff endpoints, audit trail (upload/view/review + driver_verification update), approved driver can accept a job (200) while unverified gets 403. Frontend: mobile-viewport Playwright E2E — register -> /onboarding with 7 cards (6 required + optional cold-chain label), progress '0 of 6', all Missing; /dashboard and /jobs both redirect unverified driver to /onboarding; upload via hidden onboarding-file-input flips badge to 'Pending review' + toast; commercial_insurance without expiry shows 'Enter the insurance expiry date first' error toast, works after date entry; after 6 uploads holding banner (verification-holding-banner) appears and status shows 'pending review'; Admin /admin -> Drivers tab lists rows with 7 chips, Eye opens /api/driver-documents/{id}/file?auth=..., Check approves (chip->approved, upload button hidden + 'Verified by our team' on driver side), X + reject dialog with notes sets rejected and driver sees 'Reason: TEST_QA scan unreadable' with a Replace button; Replace re-uploads -> pending and holding banner returns; 'Approve Driver' -> approved and the driver's /onboarding auto-redirected to /dashboard via the poll, /jobs then accessible. Regression: driver1->/dashboard+/jobs, facility1->/facility, dispatcher1->/dispatch, admin tabs Users/Jobs/Fees/Permits/Reviews/Ledger/Transactions(tab-tx) all load; RBAC suite test_rbac_marketplace.py 30/30 passed.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "DELETE /api/users/{id}", "issue": "Deleting a driver user leaves orphaned db.drivers record, driver_documents rows and object-storage blobs behind (admin list tolerates it, but storage/data leaks accumulate)."},
+      {"endpoint": "PUT /api/admin/driver-verifications/{user_id}", "issue": "Allows verification_status=approved even when one or more required docs are still 'pending' or 'rejected' — no server-side guard; approving with a rejected TDG cert succeeded and unlocked job acceptance."},
+      {"endpoint": "CORS middleware", "issue": "allow_credentials=True combined with CORS_ORIGINS='*' is an invalid combo per the CORS spec (browsers reject credentialed wildcard). Harmless today (bearer tokens in localStorage) but should use explicit origins."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {"flow": "Vehicle registration upload", "issue": "Backend accepts an optional vehicle_plate form field on POST /api/driver/documents/vehicle_registration, but OnboardingPage.js never collects/sends it, so drivers.vehicle_plate stays null and the admin Drivers tab shows no plate. Feature spec says 'vehicle registration + plate'.", "affected_selectors": ["doc-card-vehicle_registration", "upload-btn-vehicle_registration"]}
+    ],
+    "design_issues": [
+      {"screen": "Onboarding (mobile 390px)", "issues": ["Layout, badge contrast, progress bar and holding banner all look good; no issues found."]},
+      {"screen": "Admin Drivers tab (1920px)", "issues": ["Doc chips + action icons are readable; icon-only Eye/Check/X buttons rely on title attributes only — consider aria-labels for a11y (minor)."]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_driver_onboarding.py",
+    "/app/backend/tests/test_rbac_marketplace.py",
+    "/app/test_reports/pytest/iteration_10_onboarding.xml",
+    "/app/scripts/qa_cleanup_iter10.py"
+  ],
+  "action_items": [
+    "Optional: add vehicle plate input on the vehicle_registration card and send vehicle_plate in the upload FormData.",
+    "Optional: block/warn on 'Approve Driver' when a required document is not approved (server-side check).",
+    "Optional: cascade-delete driver record/documents/storage blobs when a driver user is deleted."
+  ],
+  "critical_code_review_comments": [
+    "No blocking defects found in the onboarding feature; all reported items are hardening/minor gaps.",
+    "OnboardingPage useCallback deliberately omits refreshUser/navigate from deps (eslint-disabled) — acceptable but note the 15s interval closes over a stale token if the token changes without remount.",
+    "Auth playbook checks: bcrypt is used via bcrypt.hashpw (hashes are $2b$), but this app uses bearer JWT in localStorage rather than httpOnly cookies, and has NO brute-force lockout and no seed_admin routine (admin is auto-promoted via ADMIN_EMAIL). Pre-existing design, unchanged by this feature."
+  ],
+  "updated_files": ["/app/backend/tests/test_driver_onboarding.py", "/app/scripts/qa_cleanup_iter10.py"],
+  "success_rate": {"backend": "100% (18/18 onboarding + 30/30 RBAC regression)", "frontend": "100% of tested onboarding/admin flows"},
+  "seed_data_creation": "Created throwaway drivers TEST_qa_* (pytest, deleted in fixture teardown) and UI driver TEST_qa_ui_1787130123@test.com plus TEST_QA Transport jobs — all deleted via /app/scripts/qa_cleanup_iter10.py.",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "As per /app/memory/test_credentials.md (admin/driver1/facility1/dispatcher1 all valid).",
+  "context_for_next_testing_agent": "Login response field is 'access_token' (not 'token'); admin tab testid for Transactions is 'tab-drivers'-style 'tab-tx'. Admin Drivers tab needs wait_for_selector on [data-testid^=driver-verification-row-] (rows render async). Playwright upload pattern that works: click upload-btn-{doc_type} then set_input_files on [data-testid=onboarding-file-input]. Direct urllib/requests calls from inside the browser-automation sandbox returned 403 on /api/auth/login — use page.evaluate(fetch) instead, or the pytest runner (requests works from the main container). newdriver@test.com remains 'incomplete' with 0 docs.",
+  "rca_of_the_issue": "No defects requiring RCA. One earlier false negative ('No driver verification records yet.') was my own test bug — rows were counted before the async fetch resolved; adding wait_for_selector confirmed 3 driver rows render correctly."
+}
