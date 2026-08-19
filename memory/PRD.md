@@ -205,6 +205,13 @@ Build an app for medical transportation that people can register and pay a month
 - **Frontend /dispatch** (desktop-first, RoleRoute dispatcher/admin): 7 columns (Open Pool, Offered, Accepted, Picked Up, In Transit, Delivered, Exceptions), 10s polling, job dialog with custody timeline, assign/reassign select, cancel with confirm step, red (urgent/exception) vs amber (stale) highlighting + legend, toast offset below header
 - Tested: iterations 14 & 15 — backend 20/20 dispatch tests, frontend all flows verified, regressions green
 
+### Admin Driver Management (June 2026)
+- **GET /api/admin/driver-verifications** enriched: credential statuses (CVOR/TDG/VSC/insurance), insurance_expiry + insurance_flag (expired / expiring_soon ≤30d), rating_avg + rating_count (review aggregate), total_trips, compliant + compliance_issues
+- **'suspended'** added to driver verification statuses; re-approving a suspended driver skips the document blocker; every status change audited with {from, to} details (both admin endpoints)
+- **Automatic compliance gate** (is_driver_verified): blocks NEW offers/assignments/accepts for non-approved, suspended, or insurance-expired drivers; excluded from dispatcher assign list; active deliveries unaffected (user choice); nullable driver fields (insurance_expiry etc.) clearable via PUT record
+- **Frontend Drivers tab** rewritten as a table: credential chips, rating, trips, status badges, red/amber row tints for insurance flags, review dialog with document approve/reject + Approve/Reject/Suspend/Move-back actions
+- Tested: iteration 16 (backend 14/14 after fixes, frontend 100%) + regressions green
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
