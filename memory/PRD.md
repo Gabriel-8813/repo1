@@ -269,6 +269,12 @@ Build an app for medical transportation that people can register and pay a month
 - Reviewer demo accounts seeded (idempotent /app/backend/seed_demo_accounts.py, in test_credentials.md): demo.driver/facility/dispatcher/admin@meditrans.ca — driver fully approved w/ 1-yr insurance + cold-chain, facility owns approved Demo Medical Clinic, all privacy pre-accepted; all 4 logins verified via API
 - Self-tested via curl + screenshots (footer, terms page, demo logins)
 
+### App Store Assets (June 2026)
+- Master assets in /app/frontend/resources/: icon.png 1024², splash.png 2732² (white, emblem + tagline), README.md
+- Native sets generated via `npx @capacitor/assets generate` — 10 iOS (Assets.xcassets) + 87 Android (res/) files
+- 4 framed store screenshots at 1290×2796 (6.7" App Store size) in resources/store-screenshots/: login, job board, earnings, dashboard — captured from the live app as demo.driver, composed on clinical-blue background with captions
+- Verified: icon/splash rendered correctly, screenshots previewed
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)
