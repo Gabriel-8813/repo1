@@ -119,6 +119,14 @@ Build an app for medical transportation that people can register and pay a month
 5. Commercial Vehicle Insurance
 6. First Aid & CPR (optional)
 
+### Marketplace Shared Data Model (June 2026)
+- **Enums**: user roles (driver/facility/dispatcher/admin), user status (pending/approved/suspended), facility types (pharmacy/clinic/lab/hospital/health_shop/other), item categories (prescription/lab_sample/biological/medical_equipment/medical_supply/other), handling flags (cold_chain/controlled_substance/fragile/urgent/signature_required/id_required), job statuses (created/offered/accepted/picked_up/in_transit/delivered/cancelled/returned + legacy open/completed), driver verification (incomplete/pending_review/approved/rejected), compliance statuses (not_submitted/pending/valid/expired/rejected)
+- **USERS extended**: `status` field added (existing users backfilled to approved on startup); new roles facility & dispatcher accepted. Admin CRUD: `POST/GET /api/users` (role/status filters), `GET/PUT/DELETE /api/users/{id}`
+- **DRIVERS collection** (`db.drivers`, keyed by user_id): vehicle_type, vehicle_plate, cvor_status, tdg_cert_status, vulnerable_sector_check_status, insurance_status, insurance_expiry, cold_chain_certified, verification_status, rating_avg, total_trips. CRUD: `POST /api/drivers` (driver self or admin), `GET /api/drivers` (admin, filter verification_status), `GET/PUT/DELETE /api/drivers/{user_id}/record`. Drivers cannot self-set verification_status/rating/trips (admin only)
+- **FACILITIES collection** (`db.facilities`): name, type, address, contact_name, contact_phone, billing_email, status, owner_user_id. Full CRUD at `/api/facilities` (owner/admin for update/delete)
+- **JOBS extended additively**: facility_id (validated to exist), item_category, handling_flags, distance_km, payout_amount, special_instructions ("non-clinical handling notes only" — no clinical/PHI fields), assigned_driver_id, picked_up_at, delivered_at. Legacy aliases auto-synced both ways: dropoff_address↔delivery_address, payout_amount↔offered_price, distance_km↔estimated_distance_km, assigned_driver_id↔accepted_by. New endpoints: `GET/PUT/DELETE /api/jobs/{id}`; PUT auto-stamps accepted_at/picked_up_at/delivered_at on status transitions. Old driver UI payloads/statuses fully backward compatible
+- **No UI built yet** (per user request). Tested via full curl smoke suite (users/drivers/facilities/jobs CRUD, enum 422 validation, RBAC 403s, lifecycle timestamps, legacy compat) — all passing
+
 ## Prioritized Backlog
 
 ### P0 - Critical (Next Sprint)

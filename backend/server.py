@@ -174,26 +174,33 @@ class DriverProfileUpdate(BaseModel):
     permits: Optional[Dict[str, bool]] = None
 
 class JobCreate(BaseModel):
-    title: str
+    title: Optional[str] = "Medical Transport"
     pickup_address: str
-    delivery_address: str
-    pickup_city: str
-    delivery_city: str
-    goods_type: str
+    delivery_address: Optional[str] = None
+    dropoff_address: Optional[str] = None
+    pickup_city: Optional[str] = ""
+    delivery_city: Optional[str] = ""
+    goods_type: Optional[str] = None
     temperature_controlled: bool = False
     urgency: str = "standard"  # standard, urgent, emergency
-    estimated_distance_km: float
-    offered_price: float
+    estimated_distance_km: Optional[float] = None
+    distance_km: Optional[float] = None
+    offered_price: Optional[float] = None
+    payout_amount: Optional[float] = None
     notes: Optional[str] = None
+    facility_id: Optional[str] = None
+    item_category: Optional[str] = None
+    handling_flags: List[str] = []
+    special_instructions: Optional[str] = None  # non-clinical handling notes only
 
 class JobResponse(BaseModel):
     id: str
-    title: str
+    title: Optional[str] = None
     pickup_address: str
     delivery_address: str
-    pickup_city: str
-    delivery_city: str
-    goods_type: str
+    pickup_city: Optional[str] = ""
+    delivery_city: Optional[str] = ""
+    goods_type: Optional[str] = None
     temperature_controlled: bool
     urgency: str
     estimated_distance_km: float
@@ -205,6 +212,16 @@ class JobResponse(BaseModel):
     created_at: str
     accepted_at: Optional[str]
     completed_at: Optional[str]
+    dropoff_address: Optional[str] = None
+    distance_km: Optional[float] = None
+    payout_amount: Optional[float] = None
+    facility_id: Optional[str] = None
+    item_category: Optional[str] = None
+    handling_flags: List[str] = []
+    special_instructions: Optional[str] = None
+    assigned_driver_id: Optional[str] = None
+    picked_up_at: Optional[str] = None
+    delivered_at: Optional[str] = None
 
 class FeeAgreement(BaseModel):
     base_rate_per_km: float = 1.50
@@ -274,6 +291,100 @@ class ReviewCreate(BaseModel):
     comment: Optional[str] = None
     reviewer_name: Optional[str] = None
 
+# ---- Marketplace shared data model (enums + models) ----
+USER_ROLES = {"driver", "facility", "dispatcher", "admin"}
+USER_STATUSES = {"pending", "approved", "suspended"}
+FACILITY_TYPES = {"pharmacy", "clinic", "lab", "hospital", "health_shop", "other"}
+ITEM_CATEGORIES = {"prescription", "lab_sample", "biological", "medical_equipment", "medical_supply", "other"}
+HANDLING_FLAGS = {"cold_chain", "controlled_substance", "fragile", "urgent", "signature_required", "id_required"}
+# "open"/"completed" kept as legacy aliases of "created"/"delivered"
+JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed"}
+DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected"}
+COMPLIANCE_STATUSES = {"not_submitted", "pending", "valid", "expired", "rejected"}
+
+class MarketplaceUserCreate(BaseModel):
+    name: str
+    email: EmailStr
+    phone: str
+    password: str
+    role: str = "driver"
+    status: str = "pending"
+
+class MarketplaceUserUpdate(BaseModel):
+    name: Optional[str] = None
+    email: Optional[EmailStr] = None
+    phone: Optional[str] = None
+    role: Optional[str] = None
+    status: Optional[str] = None
+
+class DriverRecordCreate(BaseModel):
+    user_id: Optional[str] = None  # admin may set; defaults to caller
+    vehicle_type: Optional[str] = None
+    vehicle_plate: Optional[str] = None
+    cvor_status: str = "not_submitted"
+    tdg_cert_status: str = "not_submitted"
+    vulnerable_sector_check_status: str = "not_submitted"
+    insurance_status: str = "not_submitted"
+    insurance_expiry: Optional[str] = None
+    cold_chain_certified: bool = False
+    verification_status: str = "incomplete"
+
+class DriverRecordUpdate(BaseModel):
+    vehicle_type: Optional[str] = None
+    vehicle_plate: Optional[str] = None
+    cvor_status: Optional[str] = None
+    tdg_cert_status: Optional[str] = None
+    vulnerable_sector_check_status: Optional[str] = None
+    insurance_status: Optional[str] = None
+    insurance_expiry: Optional[str] = None
+    cold_chain_certified: Optional[bool] = None
+    verification_status: Optional[str] = None
+    rating_avg: Optional[float] = None
+    total_trips: Optional[int] = None
+
+class FacilityCreate(BaseModel):
+    name: str
+    type: str
+    address: str
+    contact_name: str
+    contact_phone: str
+    billing_email: EmailStr
+    status: str = "pending"
+
+class FacilityUpdate(BaseModel):
+    name: Optional[str] = None
+    type: Optional[str] = None
+    address: Optional[str] = None
+    contact_name: Optional[str] = None
+    contact_phone: Optional[str] = None
+    billing_email: Optional[EmailStr] = None
+    status: Optional[str] = None
+
+class JobUpdate(BaseModel):
+    title: Optional[str] = None
+    pickup_address: Optional[str] = None
+    dropoff_address: Optional[str] = None
+    item_category: Optional[str] = None
+    handling_flags: Optional[List[str]] = None
+    distance_km: Optional[float] = None
+    payout_amount: Optional[float] = None
+    special_instructions: Optional[str] = None
+    status: Optional[str] = None
+    assigned_driver_id: Optional[str] = None
+    facility_id: Optional[str] = None
+    urgency: Optional[str] = None
+    notes: Optional[str] = None
+
+def validate_enum(value, allowed: set, field: str):
+    if value is not None and value not in allowed:
+        raise HTTPException(status_code=422, detail=f"Invalid {field} '{value}'. Allowed: {sorted(allowed)}")
+
+def validate_handling_flags(flags):
+    if flags:
+        bad = set(flags) - HANDLING_FLAGS
+        if bad:
+            raise HTTPException(status_code=422, detail=f"Invalid handling_flags {sorted(bad)}. Allowed: {sorted(HANDLING_FLAGS)}")
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -328,6 +439,7 @@ async def register(user_data: UserCreate):
         "full_name": user_data.full_name,
         "phone": user_data.phone,
         "role": role,
+        "status": "approved",
         "created_at": datetime.now(timezone.utc).isoformat(),
         "driver_profile": None
     }
@@ -1085,16 +1197,40 @@ async def create_connect_login_link(current_user: dict = Depends(get_current_use
 # Job Routes
 @api_router.post("/jobs", response_model=JobResponse)
 async def create_job(job: JobCreate, current_user: dict = Depends(get_current_user)):
+    data = job.model_dump()
+    validate_enum(data.get("item_category"), ITEM_CATEGORIES, "item_category")
+    validate_handling_flags(data.get("handling_flags"))
+    # sync legacy <-> marketplace field aliases
+    dropoff = data.get("delivery_address") or data.get("dropoff_address")
+    if not dropoff:
+        raise HTTPException(status_code=422, detail="delivery_address or dropoff_address is required")
+    data["delivery_address"] = dropoff
+    data["dropoff_address"] = dropoff
+    distance = data.get("distance_km") if data.get("distance_km") is not None else data.get("estimated_distance_km")
+    data["distance_km"] = distance
+    data["estimated_distance_km"] = distance if distance is not None else 0
+    payout = data.get("payout_amount") if data.get("payout_amount") is not None else data.get("offered_price")
+    if payout is None:
+        raise HTTPException(status_code=422, detail="payout_amount or offered_price is required")
+    data["payout_amount"] = payout
+    data["offered_price"] = payout
+    if data.get("facility_id"):
+        facility = await db.facilities.find_one({"id": data["facility_id"]}, {"_id": 0})
+        if not facility:
+            raise HTTPException(status_code=404, detail="Facility not found")
     job_id = str(uuid.uuid4())
     job_doc = {
         "id": job_id,
-        **job.model_dump(),
+        **data,
         "status": "open",
         "posted_by": current_user["id"],
         "accepted_by": None,
+        "assigned_driver_id": None,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "accepted_at": None,
-        "completed_at": None
+        "completed_at": None,
+        "picked_up_at": None,
+        "delivered_at": None
     }
     await db.jobs.insert_one(job_doc)
     return JobResponse(**job_doc)
@@ -1462,6 +1598,254 @@ async def admin_delete_permit(permit_id: str, admin: dict = Depends(require_admi
         raise HTTPException(status_code=404, detail="Permit not found")
     return {"status": "deleted", "permit_id": permit_id}
 
+# ---- Marketplace CRUD: Users (admin) ----
+def user_public(u: dict) -> dict:
+    u = {k: v for k, v in u.items() if k not in ("password_hash", "_id")}
+    u.setdefault("name", u.get("full_name"))
+    return u
+
+@api_router.post("/users", status_code=201)
+async def admin_create_user(payload: MarketplaceUserCreate, admin: dict = Depends(require_admin)):
+    validate_enum(payload.role, USER_ROLES, "role")
+    validate_enum(payload.status, USER_STATUSES, "status")
+    if await db.users.find_one({"email": payload.email}):
+        raise HTTPException(status_code=400, detail="Email already registered")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "email": payload.email,
+        "password_hash": hash_password(payload.password),
+        "full_name": payload.name,
+        "name": payload.name,
+        "phone": payload.phone,
+        "role": payload.role,
+        "status": payload.status,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "driver_profile": None
+    }
+    await db.users.insert_one(doc)
+    return user_public(doc)
+
+@api_router.get("/users")
+async def admin_list_users(role: Optional[str] = None, status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    query = {}
+    if role:
+        query["role"] = role
+    if status:
+        query["status"] = status
+    users = await db.users.find(query, {"_id": 0, "password_hash": 0}).sort("created_at", -1).to_list(500)
+    return {"users": [user_public(u) for u in users]}
+
+@api_router.get("/users/{user_id}")
+async def admin_get_user(user_id: str, admin: dict = Depends(require_admin)):
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    return user_public(user)
+
+@api_router.put("/users/{user_id}")
+async def admin_update_user(user_id: str, payload: MarketplaceUserUpdate, admin: dict = Depends(require_admin)):
+    validate_enum(payload.role, USER_ROLES, "role")
+    validate_enum(payload.status, USER_STATUSES, "status")
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "name" in updates:
+        updates["full_name"] = updates["name"]
+    result = await db.users.update_one({"id": user_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
+    return user_public(user)
+
+@api_router.delete("/users/{user_id}")
+async def admin_delete_user_v2(user_id: str, admin: dict = Depends(require_admin)):
+    if user_id == admin["id"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    result = await db.users.delete_one({"id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="User not found")
+    await db.drivers.delete_one({"user_id": user_id})
+    return {"status": "deleted", "user_id": user_id}
+
+# ---- Marketplace CRUD: Drivers (extends a user) ----
+def validate_driver_fields(payload):
+    for f in ("cvor_status", "tdg_cert_status", "vulnerable_sector_check_status", "insurance_status"):
+        validate_enum(getattr(payload, f, None), COMPLIANCE_STATUSES, f)
+    validate_enum(getattr(payload, "verification_status", None), DRIVER_VERIFICATION_STATUSES, "verification_status")
+
+@api_router.post("/drivers", status_code=201)
+async def create_driver_record(payload: DriverRecordCreate, current_user: dict = Depends(get_current_user)):
+    validate_driver_fields(payload)
+    target_user_id = payload.user_id if (payload.user_id and current_user.get("role") == "admin") else current_user["id"]
+    target = await db.users.find_one({"id": target_user_id}, {"_id": 0})
+    if not target:
+        raise HTTPException(status_code=404, detail="User not found")
+    if await db.drivers.find_one({"user_id": target_user_id}):
+        raise HTTPException(status_code=400, detail="Driver record already exists for this user")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "user_id": target_user_id,
+        **{k: v for k, v in payload.model_dump().items() if k != "user_id"},
+        "rating_avg": 0.0,
+        "total_trips": 0,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.drivers.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/drivers")
+async def list_driver_records(verification_status: Optional[str] = None, admin: dict = Depends(require_admin)):
+    query = {}
+    if verification_status:
+        query["verification_status"] = verification_status
+    drivers = await db.drivers.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"drivers": drivers}
+
+@api_router.get("/drivers/{user_id}/record")
+async def get_driver_record(user_id: str, current_user: dict = Depends(get_current_user)):
+    if current_user["id"] != user_id and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    driver = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
+    if not driver:
+        raise HTTPException(status_code=404, detail="Driver record not found")
+    return driver
+
+@api_router.put("/drivers/{user_id}/record")
+async def update_driver_record(user_id: str, payload: DriverRecordUpdate, current_user: dict = Depends(get_current_user)):
+    is_admin = current_user.get("role") == "admin"
+    if current_user["id"] != user_id and not is_admin:
+        raise HTTPException(status_code=403, detail="Not authorized")
+    validate_driver_fields(payload)
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not is_admin:
+        for f in ("verification_status", "rating_avg", "total_trips"):
+            updates.pop(f, None)
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    result = await db.drivers.update_one({"user_id": user_id}, {"$set": updates})
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Driver record not found")
+    return await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
+
+@api_router.delete("/drivers/{user_id}/record")
+async def delete_driver_record(user_id: str, admin: dict = Depends(require_admin)):
+    result = await db.drivers.delete_one({"user_id": user_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Driver record not found")
+    return {"status": "deleted", "user_id": user_id}
+
+# ---- Marketplace CRUD: Facilities ----
+@api_router.post("/facilities", status_code=201)
+async def create_facility(payload: FacilityCreate, current_user: dict = Depends(get_current_user)):
+    validate_enum(payload.type, FACILITY_TYPES, "type")
+    validate_enum(payload.status, USER_STATUSES, "status")
+    doc = {
+        "id": str(uuid.uuid4()),
+        **payload.model_dump(),
+        "owner_user_id": current_user["id"],
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.facilities.insert_one(doc)
+    doc.pop("_id", None)
+    return doc
+
+@api_router.get("/facilities")
+async def list_facilities(type: Optional[str] = None, status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    query = {}
+    if type:
+        query["type"] = type
+    if status:
+        query["status"] = status
+    facilities = await db.facilities.find(query, {"_id": 0}).sort("created_at", -1).to_list(500)
+    return {"facilities": facilities}
+
+@api_router.get("/facilities/{facility_id}")
+async def get_facility(facility_id: str, current_user: dict = Depends(get_current_user)):
+    facility = await db.facilities.find_one({"id": facility_id}, {"_id": 0})
+    if not facility:
+        raise HTTPException(status_code=404, detail="Facility not found")
+    return facility
+
+@api_router.put("/facilities/{facility_id}")
+async def update_facility(facility_id: str, payload: FacilityUpdate, current_user: dict = Depends(get_current_user)):
+    facility = await db.facilities.find_one({"id": facility_id}, {"_id": 0})
+    if not facility:
+        raise HTTPException(status_code=404, detail="Facility not found")
+    if facility.get("owner_user_id") != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    validate_enum(payload.type, FACILITY_TYPES, "type")
+    validate_enum(payload.status, USER_STATUSES, "status")
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    await db.facilities.update_one({"id": facility_id}, {"$set": updates})
+    return await db.facilities.find_one({"id": facility_id}, {"_id": 0})
+
+@api_router.delete("/facilities/{facility_id}")
+async def delete_facility(facility_id: str, current_user: dict = Depends(get_current_user)):
+    facility = await db.facilities.find_one({"id": facility_id}, {"_id": 0})
+    if not facility:
+        raise HTTPException(status_code=404, detail="Facility not found")
+    if facility.get("owner_user_id") != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.facilities.delete_one({"id": facility_id})
+    return {"status": "deleted", "facility_id": facility_id}
+
+# ---- Marketplace CRUD: Jobs (read/update/delete by id) ----
+@api_router.get("/jobs/{job_id}")
+async def get_job_by_id(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return job
+
+@api_router.put("/jobs/{job_id}")
+async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    is_admin = current_user.get("role") == "admin"
+    is_poster = job.get("posted_by") == current_user["id"]
+    is_assigned = current_user["id"] in (job.get("accepted_by"), job.get("assigned_driver_id"))
+    if not (is_admin or is_poster or is_assigned):
+        raise HTTPException(status_code=403, detail="Not authorized")
+    validate_enum(payload.status, JOB_STATUSES, "status")
+    validate_enum(payload.item_category, ITEM_CATEGORIES, "item_category")
+    validate_handling_flags(payload.handling_flags)
+    updates = {k: v for k, v in payload.model_dump().items() if v is not None}
+    if not updates:
+        raise HTTPException(status_code=400, detail="No fields to update")
+    if "dropoff_address" in updates:
+        updates["delivery_address"] = updates["dropoff_address"]
+    if "payout_amount" in updates:
+        updates["offered_price"] = updates["payout_amount"]
+    if "distance_km" in updates:
+        updates["estimated_distance_km"] = updates["distance_km"]
+    if "assigned_driver_id" in updates:
+        updates["accepted_by"] = updates["assigned_driver_id"]
+    new_status = updates.get("status")
+    now = datetime.now(timezone.utc).isoformat()
+    if new_status == "accepted" and not job.get("accepted_at"):
+        updates["accepted_at"] = now
+    elif new_status == "picked_up":
+        updates["picked_up_at"] = now
+    elif new_status in ("delivered", "completed"):
+        updates["delivered_at"] = now
+        updates["completed_at"] = now
+    await db.jobs.update_one({"id": job_id}, {"$set": updates})
+    return await db.jobs.find_one({"id": job_id}, {"_id": 0})
+
+@api_router.delete("/jobs/{job_id}")
+async def delete_job(job_id: str, current_user: dict = Depends(get_current_user)):
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.get("posted_by") != current_user["id"] and current_user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Not authorized")
+    await db.jobs.delete_one({"id": job_id})
+    return {"status": "deleted", "job_id": job_id}
+
 # Health check
 @api_router.get("/")
 async def root():
@@ -1506,6 +1890,8 @@ async def startup_event():
     await db.users.update_many({}, {"$unset": {
         "subscription_plan": "", "subscription_status": "", "subscription_expires": ""
     }})
+    # Backfill status on existing users (marketplace data model)
+    await db.users.update_many({"status": {"$exists": False}}, {"$set": {"status": "approved"}})
     # Auto-promote admin if ADMIN_EMAIL user already exists
     if ADMIN_EMAIL:
         await db.users.update_one(
