@@ -97,10 +97,7 @@ frontend/android/build/
 frontend/android/app/build/
 frontend/android/local.properties
 -e 
-# Environment and credential files
-.env
-.env.*
-*.env
+# Credential files (.env files must stay committed for Emergent deployment)
 credentials.json
 *.pem
 *.key
