@@ -5,7 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 from pathlib import Path
-from pydantic import BaseModel, Field, ConfigDict, EmailStr
+from pydantic import BaseModel, Field, EmailStr
 from typing import List, Optional, Dict
 import uuid
 from datetime import datetime, timezone, timedelta
@@ -1951,7 +1951,7 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
     if job.get("status") not in ("accepted", "in_progress", "picked_up", "in_transit"):
         raise HTTPException(status_code=400, detail="Only active jobs can be completed")
     
-    now = datetime.now(timezone.utc)
+    datetime.now(timezone.utc)
     result = await settle_job_completion(job, current_user["id"], "completed")
     await log_audit(current_user, "complete", "job", job_id)
     
@@ -2248,7 +2248,7 @@ async def admin_create_user(payload: MarketplaceUserCreate, admin: dict = Depend
     return user_public(doc)
 
 @api_router.get("/users")
-async def admin_list_users(role: Optional[str] = None, status: Optional[str] = None, admin: dict = Depends(require_admin)):
+async def marketplace_list_users(role: Optional[str] = None, status: Optional[str] = None, admin: dict = Depends(require_admin)):
     query = {}
     if role:
         query["role"] = role
@@ -2265,7 +2265,7 @@ async def admin_get_user(user_id: str, admin: dict = Depends(require_admin)):
     return user_public(user)
 
 @api_router.put("/users/{user_id}")
-async def admin_update_user(user_id: str, payload: MarketplaceUserUpdate, admin: dict = Depends(require_admin)):
+async def marketplace_update_user(user_id: str, payload: MarketplaceUserUpdate, admin: dict = Depends(require_admin)):
     validate_enum(payload.role, USER_ROLES, "role")
     validate_enum(payload.status, USER_STATUSES, "status")
     updates = {k: v for k, v in payload.model_dump().items() if v is not None}
@@ -3082,7 +3082,7 @@ async def update_driver_verification(user_id: str, payload: VerificationUpdate, 
         ]
         if blockers:
             raise HTTPException(status_code=400, detail=f"Cannot approve driver — missing or rejected required documents: {', '.join(blockers)}")
-    result = await db.drivers.update_one({"user_id": user_id}, {"$set": {"verification_status": payload.verification_status}})
+    await db.drivers.update_one({"user_id": user_id}, {"$set": {"verification_status": payload.verification_status}})
     await log_audit(staff, "update", "driver_verification", user_id,
                     details={"from": rec.get("verification_status"), "to": payload.verification_status})
     rec = await db.drivers.find_one({"user_id": user_id}, {"_id": 0})
@@ -4166,12 +4166,7 @@ async def startup_event():
             doc = {**p, "order": idx + 1,
                    "created_at": datetime.now(timezone.utc).isoformat()}
             await db.permits.insert_one(doc)
-    # Clean up legacy subscription_plans settings doc (revenue model switched to commission)
-    await db.settings.delete_one({"key": "subscription_plans"})
-    # Remove stale subscription fields from users (cosmetic cleanup, harmless if absent)
-    await db.users.update_many({}, {"$unset": {
-        "subscription_plan": "", "subscription_status": "", "subscription_expires": ""
-    }})
+    # Legacy subscription cleanup removed — was a one-time migration (revenue model switched to commission)
     # Backfill status on existing users (marketplace data model)
     await db.users.update_many({"status": {"$exists": False}}, {"$set": {"status": "approved"}})
     # Audit log indexes (compliance)

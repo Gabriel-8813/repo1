@@ -300,6 +300,9 @@ Build an app for medical transportation that people can register and pay a month
 - [ ] Driver scheduling calendar
 - [ ] API for third-party integrations
 
+## Recent Fixes (June 2026)
+- Fixed Ruff F811 lint blockers: renamed duplicate `admin_list_users`/`admin_update_user` (marketplace `/users` routes) to `marketplace_list_users`/`marketplace_update_user`; removed 3 unused variables. Verified: ruff F/E9 clean, backend healthy, admin endpoints return 200.
+
 ## Next Tasks
 1. Rate-limit "Forgot password" emails (max 3 per 10 min) — abuse protection (P1)
 2. "Pay Statement" button in Facility Billing tab via Stripe (P1)
