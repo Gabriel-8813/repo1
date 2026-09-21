@@ -28,8 +28,8 @@ mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# JWT Config
-JWT_SECRET = os.environ.get('JWT_SECRET_KEY', 'meditrans_secret_key')
+# JWT Config — no weak fallback: fail fast if unset
+JWT_SECRET = os.environ['JWT_SECRET_KEY']
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRATION_HOURS = 24
 
@@ -853,6 +853,37 @@ async def ensure_driver_record(user_id: str) -> dict:
     rec.pop("_id", None)
     return rec
 
+# ---- Brute-force / rate-limit protection ----
+LOCKOUT_MAX_ATTEMPTS = 5
+LOCKOUT_MINUTES = 15
+RESET_MAX_REQUESTS = 3
+RESET_WINDOW_MINUTES = 10
+
+def client_ip(request: Request) -> str:
+    xff = request.headers.get("x-forwarded-for")
+    return xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
+
+async def check_login_lockout(identifier: str):
+    rec = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
+    if rec and rec.get("count", 0) >= LOCKOUT_MAX_ATTEMPTS:
+        if datetime.now(timezone.utc) < datetime.fromisoformat(rec["locked_until"]):
+            raise HTTPException(status_code=429, detail="Too many failed attempts. Try again in a few minutes.")
+        await db.login_attempts.delete_one({"identifier": identifier})
+
+async def record_failed_login(identifier: str):
+    await db.login_attempts.update_one(
+        {"identifier": identifier},
+        {"$inc": {"count": 1},
+         "$set": {"locked_until": (datetime.now(timezone.utc) + timedelta(minutes=LOCKOUT_MINUTES)).isoformat()}},
+        upsert=True)
+
+async def check_reset_rate_limit(identifier: str):
+    window_start = (datetime.now(timezone.utc) - timedelta(minutes=RESET_WINDOW_MINUTES)).isoformat()
+    count = await db.reset_requests.count_documents({"identifier": identifier, "at": {"$gte": window_start}})
+    if count >= RESET_MAX_REQUESTS:
+        raise HTTPException(status_code=429, detail="Too many reset requests. Please wait a few minutes and try again.")
+    await db.reset_requests.insert_one({"identifier": identifier, "at": datetime.now(timezone.utc).isoformat()})
+
 # Auth Routes
 @api_router.post("/auth/register", response_model=TokenResponse)
 async def register(user_data: UserCreate):
@@ -897,10 +928,14 @@ async def register(user_data: UserCreate):
     )
 
 @api_router.post("/auth/login", response_model=TokenResponse)
-async def login(credentials: UserLogin):
+async def login(credentials: UserLogin, request: Request):
+    identifier = f"{client_ip(request)}:{credentials.email.lower().strip()}"
+    await check_login_lockout(identifier)
     user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
     if not user or not verify_password(credentials.password, user["password_hash"]):
+        await record_failed_login(identifier)
         raise HTTPException(status_code=401, detail="Invalid credentials")
+    await db.login_attempts.delete_one({"identifier": identifier})
     
     # Lazy auto-promote if ADMIN_EMAIL matches and user isn't admin yet
     if ADMIN_EMAIL and user["email"].lower().strip() == ADMIN_EMAIL and user.get("role") != "admin":
@@ -987,6 +1022,7 @@ def _render_reset_email(full_name: str, reset_link: str) -> str:
 async def forgot_password(req: PasswordResetRequest, request: Request):
     """Request a password-reset email. Always returns 200 regardless of whether the email
     exists, to prevent user enumeration."""
+    await check_reset_rate_limit(f"{client_ip(request)}:{req.email.lower().strip()}")
     user = await db.users.find_one({"email": req.email.lower().strip()}, {"_id": 0})
     if not user:
         # Don't leak whether the email is registered
@@ -1007,10 +1043,9 @@ async def forgot_password(req: PasswordResetRequest, request: Request):
     reset_link = f"{origin}/reset-password?token={token}"
 
     if not RESEND_API_KEY:
-        # No provider configured — log and still return 200 so the flow keeps working
+        # No provider configured — log server-side only; NEVER return the token to the caller
         logger.warning(f"[forgot-password] RESEND_API_KEY not set; reset link for {user['email']}: {reset_link}")
-        return {"status": "ok", "message": "If the email is registered, a reset link has been sent.",
-                "dev_reset_link": reset_link}
+        return {"status": "ok", "message": "If the email is registered, a reset link has been sent."}
 
     try:
         params = {
@@ -1257,7 +1292,7 @@ async def stripe_webhook(request: Request):
         return {"status": "ok"}
     except Exception as e:
         logging.error(f"Webhook error: {e}")
-        return {"status": "error", "message": str(e)}
+        return {"status": "error", "message": "Webhook processing failed"}
 
 @api_router.get("/payments/history")
 async def get_payment_history(current_user: dict = Depends(get_current_user)):
@@ -2394,7 +2429,10 @@ async def get_facility(facility_id: str, current_user: dict = Depends(get_curren
     facility = await db.facilities.find_one({"id": facility_id}, {"_id": 0})
     if not facility:
         raise HTTPException(status_code=404, detail="Facility not found")
-    return strip_facility_billing(facility, current_user)
+    if current_user.get("role") in STAFF_ROLES or facility.get("owner_user_id") == current_user["id"]:
+        return facility
+    # Other roles (e.g., drivers) only see public delivery-relevant fields
+    return {k: facility[k] for k in ("id", "name", "type", "address", "city", "status", "created_at") if k in facility}
 
 @api_router.put("/facilities/{facility_id}")
 async def update_facility(facility_id: str, payload: FacilityUpdate, current_user: dict = Depends(get_current_user)):
@@ -4136,13 +4174,24 @@ async def root():
 # Include the router in the main app
 app.include_router(api_router)
 
+_cors_origins = [o.strip() for o in os.environ.get('CORS_ORIGINS', '*').split(',')]
 app.add_middleware(
     CORSMiddleware,
-    allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_credentials="*" not in _cors_origins,  # wildcard + credentials is invalid/unsafe; auth uses bearer headers
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    return response
 
 # Configure logging
 logging.basicConfig(
@@ -4153,6 +4202,8 @@ logger = logging.getLogger(__name__)
 
 @app.on_event("startup")
 async def startup_event():
+    await db.login_attempts.create_index("identifier")
+    await db.reset_requests.create_index("identifier")
     # Seed default fees if missing
     if not await db.settings.find_one({"key": "fee_agreement"}):
         await db.settings.insert_one({

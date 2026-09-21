@@ -14,16 +14,13 @@ const ForgotPasswordPage = () => {
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [sent, setSent] = useState(false);
-  const [devLink, setDevLink] = useState(null);
 
   const submit = async (e) => {
     e.preventDefault();
     setSubmitting(true);
     try {
-      const r = await axios.post(`${API}/auth/forgot-password`, { email });
+      await axios.post(`${API}/auth/forgot-password`, { email });
       setSent(true);
-      // Dev-mode fallback: backend returns dev_reset_link when Resend isn't configured
-      if (r.data.dev_reset_link) setDevLink(r.data.dev_reset_link);
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Could not send reset email');
     } finally {
@@ -85,17 +82,6 @@ const ForgotPasswordPage = () => {
               <p className="text-slate-600 text-sm mb-6">
                 If <span className="font-medium">{email}</span> is registered, you'll receive a password reset link shortly. The link expires in 1 hour.
               </p>
-              {devLink && (
-                <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-6 text-left">
-                  <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1">
-                    ⚠️ Dev mode — email provider not configured
-                  </p>
-                  <p className="text-xs text-slate-600 mb-2">Use this link to reset:</p>
-                  <a href={devLink} className="text-xs text-blue-600 break-all underline" data-testid="dev-reset-link">
-                    {devLink}
-                  </a>
-                </div>
-              )}
               <Link to="/login">
                 <Button variant="outline" className="rounded-full">Back to login</Button>
               </Link>

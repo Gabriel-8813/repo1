@@ -301,8 +301,17 @@ Build an app for medical transportation that people can register and pay a month
 - [ ] API for third-party integrations
 
 ## Recent Fixes (June 2026)
-- Fixed Ruff F811 lint blockers: renamed duplicate `admin_list_users`/`admin_update_user` (marketplace `/users` routes) to `marketplace_list_users`/`marketplace_update_user`; removed 3 unused variables. Verified: ruff F/E9 clean, backend healthy, admin endpoints return 200.
-
+- Fixed Ruff F811 lint blockers (renamed duplicate marketplace user endpoints); ruff F/E9 clean.
+- Security audit remediation (all verified via curl):
+  - SEC-001 CRITICAL: removed `dev_reset_link` from forgot-password API response and frontend dev-link UI (link now server-log only)
+  - SEC-002 HIGH: rotated JWT_SECRET_KEY to 64-char random hex in backend/.env; removed weak in-code fallback (fails fast if unset)
+  - Brute-force lockout on login: 5 failed attempts per IP+email → 15 min lockout (429), Mongo `login_attempts`
+  - Forgot-password rate limit: 3 requests per 10 min per IP+email (429), Mongo `reset_requests`
+  - Security headers middleware: HSTS, CSP, X-Content-Type-Options, X-Frame-Options, Referrer-Policy
+  - CORS: allow_credentials disabled when wildcard origins (auth uses bearer headers)
+  - Stripe webhook errors no longer echo internal exception text
+  - GET /facilities/{id}: non-staff/non-owner now see only public fields
+  - SEC-003 (LOW, accepted risk): ADMIN_EMAIL auto-promote kept intentionally (owner convenience); risk mitigated by SEC-001 fix
 ## Next Tasks
 1. Rate-limit "Forgot password" emails (max 3 per 10 min) — abuse protection (P1)
 2. "Pay Statement" button in Facility Billing tab via Stripe (P1)
