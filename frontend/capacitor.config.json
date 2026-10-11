@@ -2,6 +2,10 @@
   "appId": "ca.meditrans.app",
   "appName": "MediTrans",
   "webDir": "build",
+  "server": {
+    "url": "https://meditranscanada.com",
+    "androidScheme": "https"
+  },
   "ios": {
     "contentInset": "always",
     "limitsNavigationsToAppBoundDomains": false
