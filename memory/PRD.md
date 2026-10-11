@@ -312,6 +312,8 @@ Build an app for medical transportation that people can register and pay a month
   - Stripe webhook errors no longer echo internal exception text
   - GET /facilities/{id}: non-staff/non-owner now see only public fields
   - SEC-003 (LOW, accepted risk): ADMIN_EMAIL auto-promote kept intentionally (owner convenience); risk mitigated by SEC-001 fix
+- Deployment readiness: removed .env block from .gitignore; retention purge loop no longer auto-starts (admin-triggered only). Health check PASS. App deployed; custom domain: https://meditranscanada.com
+- Capacitor config updated: server.url now points to https://meditranscanada.com so native iOS/Android builds load the live production site
 ## Next Tasks
 1. Rate-limit "Forgot password" emails (max 3 per 10 min) — abuse protection (P1)
 2. "Pay Statement" button in Facility Billing tab via Stripe (P1)
