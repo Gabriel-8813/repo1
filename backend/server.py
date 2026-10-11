@@ -3699,6 +3699,7 @@ async def run_retention_purge(actor: Optional[dict] = None) -> dict:
     return result
 
 async def retention_purge_loop():
+    # NOTE: not auto-started; retention purge runs only via POST /api/admin/compliance/purge
     while True:
         try:
             await run_retention_purge()
@@ -4235,8 +4236,7 @@ async def startup_event():
     await db.custody_events.create_index("timestamp")
     # Driver documents index
     await db.driver_documents.create_index([("user_id", 1), ("doc_type", 1)])
-    # Daily data-retention purge (compliance)
-    asyncio.create_task(retention_purge_loop())
+    # Data-retention purge is admin-triggered only (POST /api/admin/compliance/purge) — no auto loop
     # Stuck-job dispatcher alerts (every 5 min)
     asyncio.create_task(stale_sweep_loop())
     # Init object storage for driver documents
