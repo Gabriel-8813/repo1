@@ -463,6 +463,21 @@ const JobsPage = () => {
                                     }
                                   </Badge>
                                 )}
+                                {job.route_bundle && (
+                                  <Badge className="bg-emerald-100 text-emerald-700" data-testid={`route-bonus-badge-${job.id}`}>
+                                    <Route className="w-3 h-3 mr-1" /> Route +10%
+                                  </Badge>
+                                )}
+                                {job.care_handoff && (
+                                  <Badge className="bg-pink-100 text-pink-700">
+                                    <HeartHandshake className="w-3 h-3 mr-1" /> Care handoff
+                                  </Badge>
+                                )}
+                                {job.storm_priority && (
+                                  <Badge className="bg-cyan-100 text-cyan-700">
+                                    <CloudSnow className="w-3 h-3 mr-1" /> Storm priority
+                                  </Badge>
+                                )}
                               </div>
                               <div className="bg-white rounded-xl p-3 mb-4 space-y-2">
                                 <div className="flex items-start gap-2">

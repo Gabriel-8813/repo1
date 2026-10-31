@@ -300,6 +300,15 @@ Build an app for medical transportation that people can register and pay a month
 - [ ] Driver scheduling calendar
 - [ ] API for third-party integrations
 
+## Signature Suite (June 2026) — "Pharmacy-First" differentiators
+- Pharmacy-only positioning: landing hero rebranded "Canada's First Pharmacy-Only Delivery Network"
+- SealTrace™: every new job gets a tamper-evident seal code (MT-XXXXXXXX); driver verifies at pickup & delivery (write-once per stage); public no-auth verification page /verify/:code (rate-limited 30/10min/IP, no PII)
+- Neighbourhood Routes: GET /api/jobs/routes groups open jobs by city (≥2); POST /api/jobs/routes/accept accepts bundle with +10% driver bonus (same-city validated, cold-chain/declined checks, atomic with rollback, base_payout preserved; cancel reverts bonus — compounding exploit fixed)
+- Care Handoff: facility booking toggle for seniors/veterans; driver sees notices at pickup & delivery stages
+- Storm-Ready: driver opt-in toggle on dashboard (GET/PUT /api/driver/storm-ready); facility can flag storm_priority on bookings
+- Trusted Pharmacy Network: GET /api/public/network live stats (facilities, deliveries, distinct seal checks, drivers, storm-ready) shown on landing page with partner chips
+- Tested: iteration_23 (10/10 backend pytest, all frontend flows); 2 critical exploits found and fixed + all minor issues (clipboard crash, write-once seals, distinct seal counts, city normalization, rate limiting, badges on active cards, aria-pressed)
+
 ## Recent Fixes (June 2026)
 - Fixed Ruff F811 lint blockers (renamed duplicate marketplace user endpoints); ruff F/E9 clean.
 - Security audit remediation (all verified via curl):

@@ -516,7 +516,7 @@ DRIVER_JOB_FIELDS = {
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
 
 def new_seal_code() -> str:
-    return "MT-" + uuid.uuid4().hex[:6].upper()
+    return "MT-" + uuid.uuid4().hex[:8].upper()
 
 def scoped_job(job: dict, user: dict) -> dict:
     job = dec_job(dict(job))
@@ -1942,19 +1942,50 @@ async def accept_neighbourhood_route(payload: RouteAccept, current_user: dict = 
     not_open = [j["id"] for j in jobs if j.get("status") != "open"]
     if not_open:
         raise HTTPException(status_code=400, detail="One or more jobs in this route were just taken — refresh and try again")
+    # Must be a genuine neighbourhood bundle: all jobs share the same area
+    areas = {(j.get("delivery_city") or j.get("pickup_city") or "").strip().lower() for j in jobs}
+    if len(areas) != 1 or "" in areas:
+        raise HTTPException(status_code=400, detail="Route bundles must contain deliveries in the same neighbourhood")
+    if role == "driver":
+        me = current_user["id"]
+        if any(me in (j.get("declined_by") or []) for j in jobs):
+            raise HTTPException(status_code=400, detail="This route includes a job you previously declined")
+        rec = await db.drivers.find_one({"user_id": me}, {"_id": 0, "cold_chain_certified": 1})
+        if not (rec and rec.get("cold_chain_certified")):
+            if any(j.get("temperature_controlled") or "cold_chain" in (j.get("handling_flags") or []) for j in jobs):
+                raise HTTPException(status_code=403, detail="This route includes cold-chain deliveries — cold-chain certification required")
     now = datetime.now(timezone.utc).isoformat()
+    accepted_ids = []
     accepted = []
-    for j in jobs:
-        base = float(j.get("payout_amount") or 0)
-        bonus = round(base * ROUTE_BUNDLE_BONUS, 2)
-        new_payout = round(base + bonus, 2)
-        await db.jobs.update_one({"id": j["id"]}, {"$set": {
-            "status": "accepted", "accepted_by": current_user["id"], "assigned_driver_id": current_user["id"],
-            "accepted_at": now, "payout_amount": new_payout, "offered_price": new_payout,
-            "route_bundle": True, "bundle_bonus": bonus
-        }})
-        await log_audit(current_user, "accept", "job", j["id"], details={"route_bundle": True, "bonus": bonus})
-        fresh = await db.jobs.find_one({"id": j["id"]}, {"_id": 0})
+    try:
+        for j in jobs:
+            base = float(j.get("base_payout") if j.get("base_payout") is not None else (j.get("payout_amount") or 0))
+            bonus = round(base * ROUTE_BUNDLE_BONUS, 2)
+            new_payout = round(base + bonus, 2)
+            result = await db.jobs.update_one(
+                {"id": j["id"], "status": "open"},
+                {"$set": {
+                    "status": "accepted", "accepted_by": current_user["id"], "assigned_driver_id": current_user["id"],
+                    "accepted_at": now, "base_payout": base, "payout_amount": new_payout, "offered_price": new_payout,
+                    "route_bundle": True, "bundle_bonus": bonus
+                }}
+            )
+            if result.modified_count == 0:
+                raise HTTPException(status_code=400, detail="One or more jobs in this route were just taken — refresh and try again")
+            accepted_ids.append(j["id"])
+    except HTTPException:
+        # Roll back partial acceptance
+        for jid in accepted_ids:
+            orig = next(j for j in jobs if j["id"] == jid)
+            base = float(orig.get("base_payout") if orig.get("base_payout") is not None else (orig.get("payout_amount") or 0))
+            await db.jobs.update_one({"id": jid}, {"$set": {
+                "status": "open", "accepted_by": None, "assigned_driver_id": None, "accepted_at": None,
+                "payout_amount": base, "offered_price": base, "route_bundle": False, "bundle_bonus": None
+            }})
+        raise
+    for jid in accepted_ids:
+        await log_audit(current_user, "accept", "job", jid, details={"route_bundle": True})
+        fresh = await db.jobs.find_one({"id": jid}, {"_id": 0})
         await send_recipient_sms(fresh, "assigned")
         await notify_facility_owner(fresh, "driver_assigned", "Driver assigned (neighbourhood route)",
                                     f"{current_user.get('full_name', 'A courier')} accepted '{fresh.get('title') or 'your delivery'}' as part of a bundled local route.")
@@ -1977,6 +2008,8 @@ async def verify_seal(job_id: str, payload: SealVerify, current_user: dict = Dep
     valid_statuses = ("accepted", "in_progress", "picked_up") if payload.stage == "pickup" else ("picked_up", "in_transit", "delivered")
     if job.get("status") not in valid_statuses:
         raise HTTPException(status_code=400, detail=f"Seal {payload.stage} check is not available at this job stage")
+    if job.get(f"seal_{payload.stage}_verified") is not None:
+        raise HTTPException(status_code=400, detail=f"The {payload.stage} seal check has already been recorded and cannot be changed")
     doc = {
         "id": str(uuid.uuid4()),
         "job_id": job_id,
@@ -2010,6 +2043,10 @@ async def set_storm_ready(payload: StormReadyUpdate, current_user: dict = Depend
     return {"storm_ready": payload.storm_ready}
 
 # ---- Public trust endpoints (no auth, no PII) ----
+def _clean_city(c: Optional[str]) -> Optional[str]:
+    c = re.sub(r'[,\s]+(ON|Ontario)$', '', (c or '').strip(), flags=re.I).strip()
+    return c or None
+
 @api_router.get("/public/network")
 async def public_network_stats():
     facilities = await db.facilities.find({"status": "approved"}, {"_id": 0, "id": 1, "name": 1, "type": 1, "city": 1, "address": 1}).to_list(200)
@@ -2022,12 +2059,23 @@ async def public_network_stats():
     pharmacy_types = ("pharmacy", "health_shop")
     network = [{
         "name": f["name"], "type": f["type"],
-        "city": f.get("city") or _city_of(f.get("address") or "") or "Ontario",
+        "city": _clean_city(f.get("city")) or _clean_city(_city_of(f.get("address") or "")) or "Ontario",
         "deliveries": delivered_counts.get(f["id"], 0)
     } for f in facilities]
     network.sort(key=lambda x: (x["type"] not in pharmacy_types, -x["deliveries"]))
     total_delivered = sum(delivered_counts.values())
-    seal_checks = await db.custody_events.count_documents({"event_type": "seal_verified"})
+    # Distinct seal checks (job+stage) on jobs that still exist
+    pairs = []
+    async for row in db.custody_events.aggregate([
+        {"$match": {"event_type": "seal_verified"}},
+        {"$group": {"_id": {"job": "$job_id", "stage": "$checklist.stage"}}}
+    ]):
+        pairs.append(row["_id"])
+    existing = set()
+    if pairs:
+        async for j in db.jobs.find({"id": {"$in": list({p["job"] for p in pairs})}}, {"_id": 0, "id": 1}):
+            existing.add(j["id"])
+    seal_checks = sum(1 for p in pairs if p["job"] in existing)
     drivers_approved = await db.drivers.count_documents({"verification_status": "approved"})
     storm_ready = await db.drivers.count_documents({"verification_status": "approved", "storm_ready": True})
     return {
@@ -2041,7 +2089,14 @@ async def public_network_stats():
     }
 
 @api_router.get("/public/verify/{seal_code}")
-async def public_verify_seal(seal_code: str):
+async def public_verify_seal(seal_code: str, request: Request):
+    # Light per-IP rate limit against code enumeration
+    ip = client_ip(request)
+    window_start = (datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+    lookups = await db.verify_lookups.count_documents({"ip": ip, "at": {"$gte": window_start}})
+    if lookups >= 30:
+        raise HTTPException(status_code=429, detail="Too many lookups — please wait a few minutes and try again")
+    await db.verify_lookups.insert_one({"ip": ip, "at": datetime.now(timezone.utc).isoformat()})
     code = seal_code.strip().upper()
     if not code.startswith("MT-"):
         code = "MT-" + code
@@ -2147,18 +2202,21 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
     elapsed_seconds = (now - accepted_at).total_seconds()
     charged = elapsed_seconds > (grace_min * 60)
     
-    # Reopen the job so other drivers can accept it
-    await db.jobs.update_one(
-        {"id": job_id},
-        {"$set": {
-            "status": "open",
-            "accepted_by": None,
-            "assigned_driver_id": None,
-            "accepted_at": None,
-            "last_cancelled_by": current_user["id"],
-            "last_cancelled_at": now.isoformat()
-        }}
-    )
+    # Reopen the job so other drivers can accept it; revert any route-bundle bonus
+    reopen = {
+        "status": "open",
+        "accepted_by": None,
+        "assigned_driver_id": None,
+        "accepted_at": None,
+        "last_cancelled_by": current_user["id"],
+        "last_cancelled_at": now.isoformat()
+    }
+    if job.get("route_bundle"):
+        base = job.get("base_payout")
+        if base is None:
+            base = round(float(job.get("payout_amount") or 0) - float(job.get("bundle_bonus") or 0), 2)
+        reopen.update({"payout_amount": base, "offered_price": base, "route_bundle": False, "bundle_bonus": None})
+    await db.jobs.update_one({"id": job_id}, {"$set": reopen})
     await log_audit(current_user, "cancel", "job", job_id)
     await notify_dispatchers("driver_cancelled", "Driver cancelled a job",
                              f"{current_user.get('full_name', 'A driver')} cancelled '{job.get('title') or 'a delivery'}'{' (late fee charged)' if charged else ''}.", job_id)

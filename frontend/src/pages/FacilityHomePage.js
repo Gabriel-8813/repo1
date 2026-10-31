@@ -250,6 +250,7 @@ export default function FacilityHomePage() {
                     </div>
                     <div className="grid sm:grid-cols-2 gap-2">
                       <button type="button" onClick={() => setForm({ ...form, care_handoff: !form.care_handoff })}
+                        aria-pressed={form.care_handoff} role="switch" aria-checked={form.care_handoff}
                         className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-left transition-colors ${form.care_handoff ? 'bg-pink-50 border-pink-300' : 'bg-white border-slate-200 hover:border-pink-200'}`}
                         data-testid="care-handoff-toggle">
                         <HeartHandshake className={`w-4 h-4 mt-0.5 shrink-0 ${form.care_handoff ? 'text-pink-600' : 'text-slate-400'}`} />
@@ -259,6 +260,7 @@ export default function FacilityHomePage() {
                         </span>
                       </button>
                       <button type="button" onClick={() => setForm({ ...form, storm_priority: !form.storm_priority })}
+                        aria-pressed={form.storm_priority} role="switch" aria-checked={form.storm_priority}
                         className={`flex items-start gap-2 rounded-lg border px-3 py-2.5 text-left transition-colors ${form.storm_priority ? 'bg-cyan-50 border-cyan-300' : 'bg-white border-slate-200 hover:border-cyan-200'}`}
                         data-testid="storm-priority-toggle">
                         <CloudSnow className={`w-4 h-4 mt-0.5 shrink-0 ${form.storm_priority ? 'text-cyan-600' : 'text-slate-400'}`} />
@@ -314,7 +316,15 @@ export default function FacilityHomePage() {
                                 <ShieldCheck className="w-3 h-3" /> {j.seal_code}
                               </span>
                               <button type="button" className="text-[11px] text-slate-500 hover:text-blue-600 inline-flex items-center gap-0.5"
-                                onClick={() => { navigator.clipboard?.writeText(`${window.location.origin}/verify/${j.seal_code}`); toast.success('Verification link copied — share it with your patient'); }}
+                                onClick={async () => {
+                                  const link = `${window.location.origin}/verify/${j.seal_code}`;
+                                  try {
+                                    await navigator.clipboard.writeText(link);
+                                    toast.success('Verification link copied — share it with your patient');
+                                  } catch {
+                                    toast.info(`Copy this link: ${link}`, { duration: 10000 });
+                                  }
+                                }}
                                 data-testid={`copy-seal-${j.id}`}>
                                 <Copy className="w-3 h-3" /> Copy patient link
                               </button>

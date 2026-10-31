@@ -32,6 +32,41 @@ const getGPS = () => new Promise((resolve) => {
 
 const mapsUrl = (addr) => `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(addr || '')}`;
 
+const SealCheckCard = ({ job, stage, sealBusy, verifySeal }) => {
+  const verified = stage === 'pickup' ? job?.seal_pickup_verified : job?.seal_delivery_verified;
+  if (!job?.seal_code) return null;
+  return (
+    <div className={`rounded-xl border p-3 mb-4 ${verified === true ? 'bg-emerald-50 border-emerald-200' : verified === false ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`} data-testid={`seal-check-${stage}`}>
+      <div className="flex items-center justify-between gap-2 mb-1">
+        <p className="text-sm font-semibold text-slate-900 flex items-center gap-1.5">
+          <ShieldCheck className={`w-4 h-4 ${verified === true ? 'text-emerald-600' : 'text-slate-500'}`} />
+          SealTrace™ — {stage} check
+        </p>
+        <span className="font-mono text-xs font-bold text-slate-700">{job.seal_code}</span>
+      </div>
+      {verified === true ? (
+        <p className="text-xs text-emerald-700 font-medium">Seal verified intact ✓</p>
+      ) : verified === false ? (
+        <p className="text-xs text-red-600 font-medium">Seal exception recorded — dispatch alerted</p>
+      ) : (
+        <>
+          <p className="text-xs text-slate-500 mb-2">Check the tamper-evident seal before {stage === 'pickup' ? 'leaving the facility' : 'handing off'}. This check is permanent once recorded.</p>
+          <div className="flex gap-2">
+            <Button size="sm" className="flex-1 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700" disabled={sealBusy}
+              onClick={() => verifySeal(stage, true)} data-testid={`seal-intact-${stage}-btn`}>
+              <ShieldCheck className="w-3.5 h-3.5 mr-1" /> Seal intact
+            </Button>
+            <Button size="sm" variant="outline" className="flex-1 h-9 rounded-full text-red-600 border-red-200 hover:bg-red-50" disabled={sealBusy}
+              onClick={() => verifySeal(stage, false)} data-testid={`seal-broken-${stage}-btn`}>
+              <ShieldAlert className="w-3.5 h-3.5 mr-1" /> Report broken
+            </Button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
 export default function ActiveDeliveryPage() {
   const { jobId } = useParams();
   const navigate = useNavigate();
@@ -68,41 +103,6 @@ export default function ActiveDeliveryPage() {
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Could not record seal check');
     } finally { setSealBusy(false); }
-  };
-
-  const SealCheckCard = ({ stage }) => {
-    const verified = stage === 'pickup' ? job?.seal_pickup_verified : job?.seal_delivery_verified;
-    if (!job?.seal_code) return null;
-    return (
-      <div className={`rounded-xl border p-3 mb-4 ${verified === true ? 'bg-emerald-50 border-emerald-200' : verified === false ? 'bg-red-50 border-red-200' : 'bg-slate-50 border-slate-200'}`} data-testid={`seal-check-${stage}`}>
-        <div className="flex items-center justify-between gap-2 mb-1">
-          <p className="text-sm font-semibold text-slate-900 flex items-center gap-1.5">
-            <ShieldCheck className={`w-4 h-4 ${verified === true ? 'text-emerald-600' : 'text-slate-500'}`} />
-            SealTrace™ — {stage} check
-          </p>
-          <span className="font-mono text-xs font-bold text-slate-700">{job.seal_code}</span>
-        </div>
-        {verified === true ? (
-          <p className="text-xs text-emerald-700 font-medium">Seal verified intact ✓</p>
-        ) : verified === false ? (
-          <p className="text-xs text-red-600 font-medium">Seal exception recorded — dispatch alerted</p>
-        ) : (
-          <>
-            <p className="text-xs text-slate-500 mb-2">Check the tamper-evident seal before {stage === 'pickup' ? 'leaving the facility' : 'handing off'}.</p>
-            <div className="flex gap-2">
-              <Button size="sm" className="flex-1 h-9 rounded-full bg-emerald-600 hover:bg-emerald-700" disabled={sealBusy}
-                onClick={() => verifySeal(stage, true)} data-testid={`seal-intact-${stage}-btn`}>
-                <ShieldCheck className="w-3.5 h-3.5 mr-1" /> Seal intact
-              </Button>
-              <Button size="sm" variant="outline" className="flex-1 h-9 rounded-full text-red-600 border-red-200 hover:bg-red-50" disabled={sealBusy}
-                onClick={() => verifySeal(stage, false)} data-testid={`seal-broken-${stage}-btn`}>
-                <ShieldAlert className="w-3.5 h-3.5 mr-1" /> Report broken
-              </Button>
-            </div>
-          </>
-        )}
-      </div>
-    );
   };
 
   // Stage 1 checklist
@@ -398,7 +398,15 @@ export default function ActiveDeliveryPage() {
               </a>
 
               <h3 className="font-semibold text-slate-900 text-sm mb-3">Pickup checklist (required)</h3>
-              <SealCheckCard stage="pickup" />
+              {job.care_handoff && (
+                <div className="rounded-xl border border-pink-200 bg-pink-50 p-3 mb-4" data-testid="care-handoff-notice-pickup">
+                  <p className="text-xs text-pink-700">
+                    <HeartHandshake className="w-3.5 h-3.5 inline mr-1 -mt-0.5" />
+                    <span className="font-semibold">Care Handoff delivery:</span> the recipient may be a senior or veteran — plan extra time at dropoff for an in-person handoff.
+                  </p>
+                </div>
+              )}
+              <SealCheckCard job={job} stage="pickup" sealBusy={sealBusy} verifySeal={verifySeal} />
               <div className="space-y-3">
                 <label className="flex items-start gap-3 p-3 bg-slate-50 rounded-xl cursor-pointer">
                   <Checkbox checked={labelConfirmed} onCheckedChange={(v) => setLabelConfirmed(!!v)} className="mt-0.5" data-testid="checklist-label" />
@@ -500,7 +508,7 @@ export default function ActiveDeliveryPage() {
                   </p>
                 </div>
               )}
-              <SealCheckCard stage="delivery" />
+              <SealCheckCard job={job} stage="delivery" sealBusy={sealBusy} verifySeal={verifySeal} />
 
               <div className="flex gap-2 mb-4">
                 <Button

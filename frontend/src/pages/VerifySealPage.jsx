@@ -155,6 +155,10 @@ export default function VerifySealPage() {
             Pharmacies: your patients receive this code with their delivery confirmation.
           </p>
         )}
+
+        <p className="text-center mt-8">
+          <Link to="/" className="text-sm text-blue-600 hover:underline" data-testid="verify-back-home-link">← Back to MediTrans home</Link>
+        </p>
       </div>
     </div>
   );
