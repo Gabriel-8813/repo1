@@ -234,6 +234,8 @@ class JobCreate(BaseModel):
     item_category: Optional[str] = None
     handling_flags: List[str] = []
     special_instructions: Optional[str] = None  # non-clinical handling notes only
+    care_handoff: bool = False
+    storm_priority: bool = False
 
 class JobResponse(BaseModel):
     id: str
@@ -264,6 +266,9 @@ class JobResponse(BaseModel):
     assigned_driver_id: Optional[str] = None
     picked_up_at: Optional[str] = None
     delivered_at: Optional[str] = None
+    seal_code: Optional[str] = None
+    care_handoff: bool = False
+    storm_priority: bool = False
 
 class FeeAgreement(BaseModel):
     base_rate_per_km: float = 1.50
@@ -343,7 +348,7 @@ HANDLING_FLAGS = {"cold_chain", "controlled_substance", "fragile", "urgent", "si
 JOB_STATUSES = {"created", "offered", "accepted", "picked_up", "in_transit", "delivered", "cancelled", "returned", "open", "completed", "in_progress"}
 DRIVER_VERIFICATION_STATUSES = {"incomplete", "pending_review", "approved", "rejected", "suspended"}
 COMPLIANCE_STATUSES = {"not_submitted", "pending", "valid", "expired", "rejected"}
-CUSTODY_EVENT_TYPES = {"pickup_confirmed", "in_transit_ping", "delivery_attempted", "delivered", "returned", "exception"}
+CUSTODY_EVENT_TYPES = {"pickup_confirmed", "in_transit_ping", "delivery_attempted", "delivered", "returned", "exception", "seal_verified", "seal_exception"}
 
 class MarketplaceUserCreate(BaseModel):
     name: str
@@ -440,6 +445,17 @@ class CustodyEventCreate(BaseModel):
     notes: Optional[str] = None
     checklist: Optional[dict] = None
 
+class SealVerify(BaseModel):
+    stage: str  # pickup | delivery
+    intact: bool
+    notes: Optional[str] = None
+
+class RouteAccept(BaseModel):
+    job_ids: List[str] = Field(min_length=2, max_length=10)
+
+class StormReadyUpdate(BaseModel):
+    storm_ready: bool
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -492,10 +508,15 @@ DRIVER_JOB_FIELDS = {
     "payout_amount", "notes", "special_instructions", "item_category",
     "handling_flags", "status", "created_at", "accepted_at", "picked_up_at",
     "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id",
-    "item_count", "requested_pickup_time", "recipient_name", "recipient_phone"
+    "item_count", "requested_pickup_time", "recipient_name", "recipient_phone",
+    "care_handoff", "storm_priority", "seal_code", "route_bundle", "bundle_bonus",
+    "seal_pickup_verified", "seal_delivery_verified"
 }
 
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
+
+def new_seal_code() -> str:
+    return "MT-" + uuid.uuid4().hex[:6].upper()
 
 def scoped_job(job: dict, user: dict) -> dict:
     job = dec_job(dict(job))
@@ -1790,6 +1811,8 @@ async def create_job(job: JobCreate, current_user: dict = Depends(get_current_us
     job_doc = {
         "id": job_id,
         **data,
+        "seal_code": new_seal_code(),
+        "route_bundle": False,
         "status": "open",
         "posted_by": current_user["id"],
         "accepted_by": None,
@@ -1862,6 +1885,197 @@ async def get_my_jobs(current_user: dict = Depends(get_current_user)):
     ).sort("created_at", -1).to_list(100)
     await log_audit(current_user, "view", "job", "list")
     return {"jobs": [scoped_job(j, current_user) for j in jobs]}
+
+# ---- Neighbourhood Routes (bundled local deliveries) ----
+ROUTE_BUNDLE_BONUS = 0.10
+
+async def _driver_open_jobs_query(user: dict) -> dict:
+    me = user["id"]
+    query = {"status": "open", "declined_by": {"$ne": me}}
+    rec = await db.drivers.find_one({"user_id": me}, {"_id": 0, "cold_chain_certified": 1})
+    if not (rec and rec.get("cold_chain_certified")):
+        query = {"$and": [query, {"handling_flags": {"$ne": "cold_chain"}}, {"temperature_controlled": {"$ne": True}}]}
+    return query
+
+@api_router.get("/jobs/routes")
+async def get_neighbourhood_routes(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Driver access required")
+    query = await _driver_open_jobs_query(current_user)
+    jobs = await db.jobs.find(query, {"_id": 0}).sort("created_at", -1).to_list(200)
+    groups = {}
+    for j in jobs:
+        area = (j.get("delivery_city") or j.get("pickup_city") or "").strip()
+        if not area:
+            continue
+        groups.setdefault(area.lower(), {"area": area, "jobs": []})["jobs"].append(j)
+    bundles = []
+    for g in groups.values():
+        if len(g["jobs"]) < 2:
+            continue
+        g["jobs"] = g["jobs"][:5]
+        total = round(sum(float(j.get("payout_amount") or 0) for j in g["jobs"]), 2)
+        bonus = round(total * ROUTE_BUNDLE_BONUS, 2)
+        bundles.append({
+            "area": g["area"],
+            "job_ids": [j["id"] for j in g["jobs"]],
+            "jobs": [scoped_job(j, current_user) for j in g["jobs"]],
+            "job_count": len(g["jobs"]),
+            "total_payout": total,
+            "bonus_pct": int(ROUTE_BUNDLE_BONUS * 100),
+            "bonus_amount": bonus,
+            "total_with_bonus": round(total + bonus, 2)
+        })
+    bundles.sort(key=lambda b: -b["total_with_bonus"])
+    return {"bundles": bundles}
+
+@api_router.post("/jobs/routes/accept")
+async def accept_neighbourhood_route(payload: RouteAccept, current_user: dict = Depends(get_current_user)):
+    role = current_user.get("role")
+    if role not in ("driver", "admin"):
+        raise HTTPException(status_code=403, detail="Only drivers can accept routes")
+    if role == "driver" and not await is_driver_verified(current_user["id"]):
+        raise HTTPException(status_code=403, detail="You are not currently eligible for new jobs — check your verification status and insurance expiry.")
+    jobs = await db.jobs.find({"id": {"$in": payload.job_ids}}, {"_id": 0}).to_list(20)
+    if len(jobs) != len(set(payload.job_ids)):
+        raise HTTPException(status_code=404, detail="One or more jobs no longer exist")
+    not_open = [j["id"] for j in jobs if j.get("status") != "open"]
+    if not_open:
+        raise HTTPException(status_code=400, detail="One or more jobs in this route were just taken — refresh and try again")
+    now = datetime.now(timezone.utc).isoformat()
+    accepted = []
+    for j in jobs:
+        base = float(j.get("payout_amount") or 0)
+        bonus = round(base * ROUTE_BUNDLE_BONUS, 2)
+        new_payout = round(base + bonus, 2)
+        await db.jobs.update_one({"id": j["id"]}, {"$set": {
+            "status": "accepted", "accepted_by": current_user["id"], "assigned_driver_id": current_user["id"],
+            "accepted_at": now, "payout_amount": new_payout, "offered_price": new_payout,
+            "route_bundle": True, "bundle_bonus": bonus
+        }})
+        await log_audit(current_user, "accept", "job", j["id"], details={"route_bundle": True, "bonus": bonus})
+        fresh = await db.jobs.find_one({"id": j["id"]}, {"_id": 0})
+        await send_recipient_sms(fresh, "assigned")
+        await notify_facility_owner(fresh, "driver_assigned", "Driver assigned (neighbourhood route)",
+                                    f"{current_user.get('full_name', 'A courier')} accepted '{fresh.get('title') or 'your delivery'}' as part of a bundled local route.")
+        accepted.append(scoped_job(fresh, current_user))
+    return {"accepted": accepted, "count": len(accepted), "bonus_pct": int(ROUTE_BUNDLE_BONUS * 100)}
+
+# ---- SealTrace: tamper-evident seal verification ----
+@api_router.post("/jobs/{job_id}/verify-seal")
+async def verify_seal(job_id: str, payload: SealVerify, current_user: dict = Depends(get_current_user)):
+    if payload.stage not in ("pickup", "delivery"):
+        raise HTTPException(status_code=422, detail="stage must be 'pickup' or 'delivery'")
+    job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    role = current_user.get("role")
+    if role == "facility":
+        raise HTTPException(status_code=403, detail="Only the assigned driver or staff can verify seals")
+    if role == "driver" and current_user["id"] not in (job.get("accepted_by"), job.get("assigned_driver_id")):
+        raise HTTPException(status_code=403, detail="Only the assigned driver can verify the seal for this job")
+    valid_statuses = ("accepted", "in_progress", "picked_up") if payload.stage == "pickup" else ("picked_up", "in_transit", "delivered")
+    if job.get("status") not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Seal {payload.stage} check is not available at this job stage")
+    doc = {
+        "id": str(uuid.uuid4()),
+        "job_id": job_id,
+        "event_type": "seal_verified" if payload.intact else "seal_exception",
+        "notes": payload.notes,
+        "checklist": {"stage": payload.stage, "intact": payload.intact, "seal_code": job.get("seal_code")},
+        "actor_id": current_user["id"],
+        "timestamp": datetime.now(timezone.utc).isoformat()
+    }
+    await db.custody_events.insert_one(doc)
+    doc.pop("_id", None)
+    await db.jobs.update_one({"id": job_id}, {"$set": {f"seal_{payload.stage}_verified": payload.intact}})
+    await log_audit(current_user, "create", "seal_check", job_id, details={"stage": payload.stage, "intact": payload.intact})
+    if not payload.intact:
+        await notify_dispatchers("seal_exception", "Seal integrity exception",
+                                 f"Seal reported broken at {payload.stage} on '{job.get('title') or 'a delivery'}' ({job.get('seal_code')}).", job_id)
+    return {"event": doc, "seal_code": job.get("seal_code"), "stage": payload.stage, "intact": payload.intact}
+
+# ---- Storm-Ready driver flag ----
+@api_router.get("/driver/storm-ready")
+async def get_storm_ready(current_user: dict = Depends(get_current_user)):
+    rec = await db.drivers.find_one({"user_id": current_user["id"]}, {"_id": 0, "storm_ready": 1})
+    return {"storm_ready": bool(rec and rec.get("storm_ready"))}
+
+@api_router.put("/driver/storm-ready")
+async def set_storm_ready(payload: StormReadyUpdate, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "driver":
+        raise HTTPException(status_code=403, detail="Driver access required")
+    await db.drivers.update_one({"user_id": current_user["id"]}, {"$set": {"storm_ready": payload.storm_ready}}, upsert=True)
+    await log_audit(current_user, "update", "driver_storm_ready", current_user["id"], details={"storm_ready": payload.storm_ready})
+    return {"storm_ready": payload.storm_ready}
+
+# ---- Public trust endpoints (no auth, no PII) ----
+@api_router.get("/public/network")
+async def public_network_stats():
+    facilities = await db.facilities.find({"status": "approved"}, {"_id": 0, "id": 1, "name": 1, "type": 1, "city": 1, "address": 1}).to_list(200)
+    delivered_counts = {}
+    async for row in db.jobs.aggregate([
+        {"$match": {"status": {"$in": ["delivered", "completed"]}, "facility_id": {"$ne": None}}},
+        {"$group": {"_id": "$facility_id", "count": {"$sum": 1}}}
+    ]):
+        delivered_counts[row["_id"]] = row["count"]
+    pharmacy_types = ("pharmacy", "health_shop")
+    network = [{
+        "name": f["name"], "type": f["type"],
+        "city": f.get("city") or _city_of(f.get("address") or "") or "Ontario",
+        "deliveries": delivered_counts.get(f["id"], 0)
+    } for f in facilities]
+    network.sort(key=lambda x: (x["type"] not in pharmacy_types, -x["deliveries"]))
+    total_delivered = sum(delivered_counts.values())
+    seal_checks = await db.custody_events.count_documents({"event_type": "seal_verified"})
+    drivers_approved = await db.drivers.count_documents({"verification_status": "approved"})
+    storm_ready = await db.drivers.count_documents({"verification_status": "approved", "storm_ready": True})
+    return {
+        "pharmacies": sum(1 for f in facilities if f["type"] in pharmacy_types),
+        "facilities_total": len(facilities),
+        "network": network[:24],
+        "deliveries_completed": total_delivered,
+        "seal_checks_passed": seal_checks,
+        "drivers_approved": drivers_approved,
+        "storm_ready_drivers": storm_ready
+    }
+
+@api_router.get("/public/verify/{seal_code}")
+async def public_verify_seal(seal_code: str):
+    code = seal_code.strip().upper()
+    if not code.startswith("MT-"):
+        code = "MT-" + code
+    job = await db.jobs.find_one({"seal_code": code}, {"_id": 0})
+    if not job:
+        raise HTTPException(status_code=404, detail="No sealed delivery found for this code")
+    facility_name = None
+    if job.get("facility_id"):
+        fac = await db.facilities.find_one({"id": job["facility_id"]}, {"_id": 0, "name": 1})
+        facility_name = fac["name"] if fac else None
+    seal_events = await db.custody_events.find(
+        {"job_id": job["id"], "event_type": {"$in": ["seal_verified", "seal_exception"]}},
+        {"_id": 0, "event_type": 1, "checklist": 1, "timestamp": 1}
+    ).sort("timestamp", 1).to_list(10)
+    return {
+        "seal_code": code,
+        "status": job.get("status"),
+        "item_category": job.get("item_category"),
+        "urgency": job.get("urgency"),
+        "care_handoff": bool(job.get("care_handoff")),
+        "storm_priority": bool(job.get("storm_priority")),
+        "pickup_city": job.get("pickup_city"),
+        "delivery_city": job.get("delivery_city"),
+        "facility_name": facility_name,
+        "created_at": job.get("created_at"),
+        "accepted_at": job.get("accepted_at"),
+        "picked_up_at": job.get("picked_up_at"),
+        "delivered_at": job.get("delivered_at"),
+        "seal_checks": [{
+            "stage": (e.get("checklist") or {}).get("stage"),
+            "intact": e["event_type"] == "seal_verified",
+            "timestamp": e["timestamp"]
+        } for e in seal_events]
+    }
 
 @api_router.post("/jobs/{job_id}/accept")
 async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):
@@ -3140,6 +3354,8 @@ class FacilityRequestCreate(BaseModel):
     recipient_sms_consent: bool = False
     consent_data_handling: bool = False
     facility_id: Optional[str] = None
+    care_handoff: bool = False
+    storm_priority: bool = False
 
 CATEGORY_TITLES = {
     "prescription": "Prescription delivery", "lab_sample": "Lab sample transport",
@@ -3255,6 +3471,10 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
         },
         "requested_pickup_time": payload.requested_pickup_time,
         "distance_estimated": distance is not None,
+        "seal_code": new_seal_code(),
+        "care_handoff": bool(payload.care_handoff),
+        "storm_priority": bool(payload.storm_priority),
+        "route_bundle": False,
         "status": "open",
         "posted_by": current_user["id"],
         "accepted_by": None,

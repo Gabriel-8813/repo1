@@ -1,15 +1,26 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
+import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
-import { 
-  Truck, Shield, FileText, MapPin, CreditCard, 
-  CheckCircle, ArrowRight, Clock, Thermometer
+import { Input } from '../components/ui/input';
+import {
+  Truck, Shield, FileText, MapPin, CreditCard,
+  CheckCircle, ArrowRight, Clock, Thermometer,
+  ShieldCheck, Route, HeartHandshake, CloudSnow, Pill, Search, Store
 } from 'lucide-react';
+
+const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const LandingPage = () => {
   const navigate = useNavigate();
+  const [network, setNetwork] = useState(null);
+  const [sealCode, setSealCode] = useState('');
+
+  useEffect(() => {
+    axios.get(`${API}/public/network`).then((r) => setNetwork(r.data)).catch(() => {});
+  }, []);
 
   const permits = [
     { name: 'CVOR Certified', desc: 'Commercial Vehicle Operator\'s Registration' },
@@ -32,6 +43,7 @@ const LandingPage = () => {
               <Badge variant="outline" className="ml-2 text-blue-700 border-blue-200 bg-blue-50">Ontario</Badge>
             </div>
             <div className="hidden md:flex items-center gap-6">
+              <a href="#signature" className="nav-link">Why MediTrans</a>
               <a href="#features" className="nav-link">Features</a>
               <a href="#pricing" className="nav-link">Pricing</a>
               <a href="#permits" className="nav-link">Requirements</a>
@@ -59,15 +71,15 @@ const LandingPage = () => {
         <div className="max-w-7xl mx-auto">
           <div className="grid lg:grid-cols-2 gap-12 items-center">
             <div className="text-white animate-fade-in-up">
-              <Badge className="bg-blue-500/20 text-blue-200 border-blue-400/30 mb-6">
-                Ontario's Medical Transport Network
+              <Badge className="bg-emerald-500/20 text-emerald-200 border-emerald-400/30 mb-6">
+                <Pill className="w-3.5 h-3.5 mr-1.5" /> Canada's First Pharmacy-Only Delivery Network
               </Badge>
               <h1 className="font-archivo font-black text-4xl sm:text-5xl lg:text-6xl leading-tight mb-6">
-                Deliver Critical Medical Supplies Across Ontario
+                Prescriptions Delivered. Sealed. Verified.
               </h1>
               <p className="text-lg text-slate-300 mb-8 max-w-xl">
-                Join the trusted network of certified drivers transporting biological samples, 
-                pharmaceuticals, and medical equipment throughout the Greater Toronto Area and beyond.
+                MediTrans serves only pharmacies and licensed health shops — no food, no parcels, no distractions.
+                Every prescription travels under a tamper-evident seal your patients can verify online.
               </p>
               <div className="flex flex-col sm:flex-row gap-4">
                 <Button 
@@ -184,6 +196,113 @@ const LandingPage = () => {
                 className="rounded-2xl shadow-xl"
               />
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Signature Suite — what no other app does */}
+      <section id="signature" className="py-20 px-6 bg-slate-900">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-14">
+            <Badge className="bg-emerald-500/15 text-emerald-300 border-emerald-500/30 mb-4">Only on MediTrans</Badge>
+            <h2 className="font-archivo font-bold text-3xl md:text-4xl text-white mb-4">
+              Built for prescriptions. Nothing else.
+            </h2>
+            <p className="text-slate-400 max-w-2xl mx-auto">
+              General couriers carry everything. We carry only what pharmacies and health shops dispense —
+              and built four signature protections no other platform offers.
+            </p>
+          </div>
+
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+            {[
+              { icon: ShieldCheck, title: 'SealTrace™ Custody', accent: 'text-emerald-400 bg-emerald-500/10',
+                desc: 'Every delivery gets a tamper-evident seal code. Checked at pickup, checked at handoff, verifiable by anyone — patient, pharmacist or auditor.' },
+              { icon: Route, title: 'Neighbourhood Routes', accent: 'text-blue-400 bg-blue-500/10',
+                desc: 'Deliveries heading to the same community bundle into one route — drivers earn a +10% route bonus, pharmacies get faster coverage.' },
+              { icon: HeartHandshake, title: 'Care Handoff', accent: 'text-pink-400 bg-pink-500/10',
+                desc: 'For seniors and veterans: the courier waits, confirms the patient in person, and never leaves medication at the door. Ever.' },
+              { icon: CloudSnow, title: 'Storm-Ready Promise', accent: 'text-cyan-400 bg-cyan-500/10',
+                desc: 'Winter-equipped drivers opt in to storm duty, so critical medication still moves when Ontario weather shuts everything else down.' }
+            ].map((f, i) => (
+              <Card key={i} className="bg-slate-800/60 border border-slate-700/60 p-6 card-hover" data-testid={`signature-card-${i}`}>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 ${f.accent}`}>
+                  <f.icon className="w-6 h-6" />
+                </div>
+                <h3 className="font-archivo font-bold text-lg text-white mb-2">{f.title}</h3>
+                <p className="text-slate-400 text-sm leading-relaxed">{f.desc}</p>
+              </Card>
+            ))}
+          </div>
+
+          {/* Verify a delivery inline */}
+          <div className="mt-12 max-w-xl mx-auto text-center">
+            <p className="text-slate-300 text-sm mb-3 font-medium">Received a MediTrans delivery? Verify its seal:</p>
+            <form
+              className="flex gap-2"
+              onSubmit={(e) => { e.preventDefault(); if (sealCode.trim()) navigate(`/verify/${encodeURIComponent(sealCode.trim().toUpperCase())}`); }}
+            >
+              <Input
+                value={sealCode}
+                onChange={(e) => setSealCode(e.target.value)}
+                placeholder="Seal code, e.g. MT-4F7A2C"
+                className="h-12 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 font-mono uppercase"
+                data-testid="landing-seal-input"
+              />
+              <Button type="submit" className="h-12 px-6 rounded-full bg-emerald-600 hover:bg-emerald-700" data-testid="landing-verify-btn">
+                <Search className="w-4 h-4 mr-1" /> Verify
+              </Button>
+            </form>
+          </div>
+        </div>
+      </section>
+
+      {/* Trusted Pharmacy Network */}
+      <section id="network" className="py-20 px-6 bg-white">
+        <div className="max-w-7xl mx-auto">
+          <div className="text-center mb-12">
+            <Badge className="bg-blue-100 text-blue-700 border-blue-200 mb-4">Trusted Pharmacy Network</Badge>
+            <h2 className="font-archivo font-bold text-3xl md:text-4xl text-slate-900 mb-4">
+              A growing network — built on verified deliveries
+            </h2>
+            <p className="text-slate-600 max-w-2xl mx-auto">
+              Every number below is live from our sealed custody records. As more pharmacies trust MediTrans,
+              the network gets stronger for everyone.
+            </p>
+          </div>
+
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-6 max-w-4xl mx-auto mb-12" data-testid="network-stats">
+            {[
+              [network ? network.facilities_total : '—', 'Partner facilities'],
+              [network ? network.deliveries_completed : '—', 'Deliveries completed'],
+              [network ? network.drivers_approved : '—', 'Verified couriers'],
+              [network ? network.seal_checks_passed : '—', 'Seal checks passed']
+            ].map(([num, label], i) => (
+              <div key={i} className="text-center">
+                <p className="font-archivo font-black text-4xl md:text-5xl text-blue-600">{num}</p>
+                <p className="text-sm text-slate-500 mt-1">{label}</p>
+              </div>
+            ))}
+          </div>
+
+          {network && network.network.length > 0 && (
+            <div className="flex flex-wrap justify-center gap-3 max-w-4xl mx-auto" data-testid="network-partners">
+              {network.network.map((f, i) => (
+                <div key={i} className="inline-flex items-center gap-2 px-4 py-2 bg-slate-50 border border-slate-200 rounded-full">
+                  <Store className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-medium text-slate-800">{f.name}</span>
+                  <span className="text-xs text-slate-400">{f.city}</span>
+                  {f.deliveries > 0 && <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">{f.deliveries} delivered</Badge>}
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div className="text-center mt-10">
+            <p className="text-slate-500 text-sm mb-4">Run a pharmacy or health shop? Join the founding network.</p>
+            <Button onClick={() => navigate('/register')} className="bg-blue-600 hover:bg-blue-700 rounded-full px-8" data-testid="network-join-btn">
+              Join the Network <ArrowRight className="ml-2 w-4 h-4" />
+            </Button>
           </div>
         </div>
       </section>

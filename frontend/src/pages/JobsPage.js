@@ -15,7 +15,8 @@ import {
 } from '../components/ui/alert-dialog';
 import {
   Truck, MapPin, Clock, ArrowDown, LogOut, XCircle, Navigation, Phone,
-  Link as LinkIcon, Snowflake, Zap, PenLine, CreditCard, Lock, Package, Building2, EyeOff
+  Link as LinkIcon, Snowflake, Zap, PenLine, CreditCard, Lock, Package, Building2, EyeOff,
+  Route, HeartHandshake, CloudSnow
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -62,6 +63,8 @@ const JobsPage = () => {
   const [activeTab, setActiveTab] = useState('available');
   const [nowTick, setNowTick] = useState(Date.now());
   const [busyJobId, setBusyJobId] = useState(null);
+  const [bundles, setBundles] = useState([]);
+  const [busyBundle, setBusyBundle] = useState(null);
 
   const { newlyArrived } = useUrgentJobAlerts(token, true);
 
@@ -83,18 +86,37 @@ const JobsPage = () => {
   const fetchJobs = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [availableRes, myJobsRes, feesRes] = await Promise.all([
+      const [availableRes, myJobsRes, feesRes, routesRes] = await Promise.all([
         axios.get(`${API}/jobs/available`, { headers }),
         axios.get(`${API}/jobs/my`, { headers }),
-        axios.get(`${API}/fees/agreement`)
+        axios.get(`${API}/fees/agreement`),
+        axios.get(`${API}/jobs/routes`, { headers }).catch(() => ({ data: { bundles: [] } }))
       ]);
       setAvailableJobs(availableRes.data.jobs);
       setMyJobs(myJobsRes.data.jobs);
       setFees(feesRes.data.agreement);
+      setBundles(routesRes.data.bundles || []);
     } catch (error) {
       console.error('Failed to fetch jobs:', error);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleAcceptBundle = async (bundle) => {
+    setBusyBundle(bundle.area);
+    try {
+      const r = await axios.post(`${API}/jobs/routes/accept`, { job_ids: bundle.job_ids }, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      toast.success(`Route accepted — ${r.data.count} deliveries with a +${r.data.bonus_pct}% bonus on each payout!`);
+      await fetchJobs();
+      setActiveTab('my');
+    } catch (error) {
+      toast.error(error.response?.data?.detail || 'Failed to accept route');
+      await fetchJobs();
+    } finally {
+      setBusyBundle(null);
     }
   };
 
@@ -244,6 +266,44 @@ const JobsPage = () => {
           </TabsList>
 
           <TabsContent value="available">
+            {bundles.length > 0 && (
+              <div className="mb-6" data-testid="neighbourhood-routes-section">
+                <div className="flex items-center gap-2 mb-3">
+                  <Route className="w-4 h-4 text-blue-600" />
+                  <h2 className="font-archivo font-bold text-base text-slate-900">Neighbourhood Routes</h2>
+                  <Badge className="bg-emerald-100 text-emerald-700 text-[10px]">+10% route bonus</Badge>
+                </div>
+                <div className="space-y-3">
+                  {bundles.map((b) => (
+                    <Card key={b.area} className="border-2 border-blue-200 bg-blue-50/40 shadow-none" data-testid={`route-bundle-${b.area}`}>
+                      <CardContent className="p-4">
+                        <div className="flex items-center justify-between gap-2 mb-2 flex-wrap">
+                          <p className="font-archivo font-bold text-slate-900 flex items-center gap-1.5">
+                            <MapPin className="w-4 h-4 text-blue-600" /> {b.area} · {b.job_count} deliveries
+                          </p>
+                          <div className="text-right">
+                            <p className="font-archivo font-black text-xl text-emerald-700">${b.total_with_bonus.toFixed(2)}</p>
+                            <p className="text-[11px] text-slate-500">${b.total_payout.toFixed(2)} + ${b.bonus_amount.toFixed(2)} bonus</p>
+                          </div>
+                        </div>
+                        <p className="text-xs text-slate-600 mb-3">
+                          {b.jobs.map((j) => j.title || 'Medical transport').join(' · ')}
+                        </p>
+                        <Button
+                          className="w-full h-11 rounded-full bg-blue-600 hover:bg-blue-700 font-semibold"
+                          disabled={busyBundle === b.area}
+                          onClick={() => handleAcceptBundle(b)}
+                          data-testid={`accept-bundle-${b.area}-btn`}
+                        >
+                          <Route className="w-4 h-4 mr-2" /> {busyBundle === b.area ? 'Accepting…' : `Accept all ${b.job_count} — earn +10%`}
+                        </Button>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+                <div className="border-t border-slate-200 mt-5 mb-1"></div>
+              </div>
+            )}
             {availableJobs.length === 0 ? (
               <Card className="border-0 shadow-sm">
                 <CardContent className="py-16 text-center">
@@ -286,8 +346,18 @@ const JobsPage = () => {
                           </div>
                         </div>
 
-                        {flags.length > 0 && (
+                        {(flags.length > 0 || job.care_handoff || job.storm_priority) && (
                           <div className="flex flex-wrap gap-1.5 mb-3" data-testid={`job-flags-${job.id}`}>
+                            {job.care_handoff && (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium bg-pink-100 text-pink-700">
+                                <HeartHandshake className="w-3 h-3" /> Care handoff
+                              </span>
+                            )}
+                            {job.storm_priority && (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-medium bg-cyan-100 text-cyan-700">
+                                <CloudSnow className="w-3 h-3" /> Storm priority
+                              </span>
+                            )}
                             {flags.map((f) => {
                               const meta = FLAG_META[f];
                               const Icon = meta.icon;

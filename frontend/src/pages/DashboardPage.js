@@ -12,7 +12,7 @@ import { Progress } from '../components/ui/progress';
 import { 
   Truck, MapPin, DollarSign, CheckCircle, Clock, 
   AlertTriangle, ArrowRight, FileText, User, LogOut,
-  Briefcase, TrendingUp, Shield, Heart
+  Briefcase, TrendingUp, Shield, Heart, CloudSnow
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -30,6 +30,25 @@ const DashboardPage = () => {
   const [tips, setTips] = useState({ total: 0, count: 0 });
   const [rating, setRating] = useState({ avg: 0, count: 0 });
   const [loading, setLoading] = useState(true);
+  const [stormReady, setStormReady] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    axios.get(`${API}/driver/storm-ready`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((r) => setStormReady(r.data.storm_ready))
+      .catch(() => {});
+  }, [token]);
+
+  const toggleStormReady = async () => {
+    const next = !stormReady;
+    try {
+      await axios.put(`${API}/driver/storm-ready`, { storm_ready: next }, { headers: { Authorization: `Bearer ${token}` } });
+      setStormReady(next);
+      toast.success(next ? 'You are now Storm-Ready — pharmacies will see you as available in severe weather' : 'Storm-Ready turned off');
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not update Storm-Ready status');
+    }
+  };
 
   // Real-time polling for urgent/emergency jobs — fires toast when new ones appear
   const { urgentCount, newlyArrived, clearNewlyArrived } = useUrgentJobAlerts(token, true);
@@ -213,6 +232,32 @@ const DashboardPage = () => {
             </CardContent>
           </Card>
         )}
+
+        {/* Storm-Ready opt-in */}
+        <Card className={`border mb-8 ${stormReady ? 'border-cyan-300 bg-cyan-50/60' : 'border-slate-200'}`} data-testid="storm-ready-card">
+          <CardContent className="p-5">
+            <div className="flex items-center justify-between gap-4 flex-wrap">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className={`w-12 h-12 rounded-full flex items-center justify-center shrink-0 ${stormReady ? 'bg-cyan-100' : 'bg-slate-100'}`}>
+                  <CloudSnow className={`w-6 h-6 ${stormReady ? 'text-cyan-600' : 'text-slate-400'}`} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-slate-900">Storm-Ready Promise {stormReady && <Badge className="ml-1 bg-cyan-100 text-cyan-700">Active</Badge>}</h3>
+                  <p className="text-slate-600 text-sm">Winter-equipped? Opt in to deliver critical medication during severe weather — pharmacies prioritize Storm-Ready couriers.</p>
+                </div>
+              </div>
+              <Button
+                variant={stormReady ? 'outline' : 'default'}
+                onClick={toggleStormReady}
+                disabled={stormReady === null}
+                className={stormReady ? 'rounded-full border-cyan-300 text-cyan-700 hover:bg-cyan-50 shrink-0' : 'rounded-full bg-cyan-600 hover:bg-cyan-700 shrink-0'}
+                data-testid="storm-ready-toggle-btn"
+              >
+                {stormReady ? 'Turn off' : 'I\u2019m Storm-Ready'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
 
         {/* Stats Grid */}
         <div className="grid md:grid-cols-3 xl:grid-cols-6 gap-6 mb-8">

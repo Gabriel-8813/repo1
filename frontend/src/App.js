@@ -26,6 +26,7 @@ import DispatchHomePage from "./pages/DispatchHomePage";
 import OnboardingPage from "./pages/OnboardingPage";
 import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
 import EarningsPage from "./pages/EarningsPage";
+import VerifySealPage from "./pages/VerifySealPage";
 
 // Protected Route Component (kept for generic authed pages)
 // eslint-disable-next-line no-unused-vars
@@ -133,6 +134,8 @@ function AppRoutes() {
       <Route path="/confirm/:token" element={<ConfirmDeliveryPage />} />
       <Route path="/privacy" element={<PrivacyPolicyPage />} />
       <Route path="/terms" element={<TermsPage />} />
+      <Route path="/verify" element={<VerifySealPage />} />
+      <Route path="/verify/:code" element={<VerifySealPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 
