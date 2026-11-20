@@ -301,6 +301,7 @@ Build an app for medical transportation that people can register and pay a month
 - [ ] API for third-party integrations
 
 ## Signature Suite (June 2026) — "Pharmacy-First" differentiators
+- Pharmacy Testimonials: facility submits a quote (unlocks after ≥1 delivered job, POST/GET /api/facility/testimonial, one per facility, edits reset to pending); admin moderates in Admin → Reviews tab (GET/PUT /api/admin/testimonials); approved quotes show on landing page via GET /api/public/testimonials (name, city, verified delivery count). Full flow verified via curl + UI screenshots; test data cleaned up.
 - Pharmacy-only positioning: landing hero rebranded "Canada's First Pharmacy-Only Delivery Network"
 - SealTrace™: every new job gets a tamper-evident seal code (MT-XXXXXXXX); driver verifies at pickup & delivery (write-once per stage); public no-auth verification page /verify/:code (rate-limited 30/10min/IP, no PII)
 - Neighbourhood Routes: GET /api/jobs/routes groups open jobs by city (≥2); POST /api/jobs/routes/accept accepts bundle with +10% driver bonus (same-city validated, cold-chain/declined checks, atomic with rollback, base_payout preserved; cancel reverts bonus — compounding exploit fixed)

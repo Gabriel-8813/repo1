@@ -46,6 +46,7 @@ const AdminDashboardPage = () => {
   const [transactions, setTransactions] = useState([]);
   const [permits, setPermits] = useState([]);
   const [reviews, setReviews] = useState([]);
+  const [testimonials, setTestimonials] = useState([]);
   const [loading, setLoading] = useState(true);
 
   const [editUser, setEditUser] = useState(null);
@@ -67,7 +68,7 @@ const AdminDashboardPage = () => {
 
   const fetchAll = async () => {
     try {
-      const [s, u, j, f, l, t, p, r] = await Promise.all([
+      const [s, u, j, f, l, t, p, r, tm] = await Promise.all([
         axios.get(`${API}/admin/stats`, { headers }),
         axios.get(`${API}/admin/users`, { headers }),
         axios.get(`${API}/admin/jobs`, { headers }),
@@ -76,6 +77,7 @@ const AdminDashboardPage = () => {
         axios.get(`${API}/admin/transactions`, { headers }),
         axios.get(`${API}/admin/permits`, { headers }),
         axios.get(`${API}/admin/reviews`, { headers }),
+        axios.get(`${API}/admin/testimonials`, { headers }).catch(() => ({ data: { testimonials: [] } })),
       ]);
       setStats(s.data);
       setUsers(u.data.users);
@@ -86,6 +88,7 @@ const AdminDashboardPage = () => {
       setTransactions(t.data.transactions);
       setPermits(p.data.permits);
       setReviews(r.data.reviews);
+      setTestimonials(tm.data.testimonials || []);
     } catch (e) {
       toast.error('Failed to load admin data');
       console.error(e);
@@ -200,6 +203,16 @@ const AdminDashboardPage = () => {
       fetchAll();
     } catch (e) {
       toast.error(e.response?.data?.detail || 'Delete failed');
+    }
+  };
+
+  const moderateTestimonial = async (id, status) => {
+    try {
+      await axios.put(`${API}/admin/testimonials/${id}`, { status }, { headers });
+      toast.success(status === 'approved' ? 'Testimonial approved — now live on the homepage' : 'Testimonial rejected');
+      fetchAll();
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Moderation failed');
     }
   };
 
@@ -606,6 +619,53 @@ const AdminDashboardPage = () => {
                               </AlertDialogFooter>
                             </AlertDialogContent>
                           </AlertDialog>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+
+            <Card className="border-0 shadow-[0_2px_8px_rgba(0,0,0,0.08)] mt-6">
+              <CardHeader><CardTitle className="font-archivo">Pharmacy Testimonials ({testimonials.length})</CardTitle></CardHeader>
+              <CardContent>
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>Facility</TableHead>
+                      <TableHead>Quote</TableHead>
+                      <TableHead>Author</TableHead>
+                      <TableHead>Status</TableHead>
+                      <TableHead>Updated</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {testimonials.length === 0 ? (
+                      <TableRow><TableCell colSpan={6} className="text-center py-8 text-slate-400">No testimonials submitted yet</TableCell></TableRow>
+                    ) : testimonials.map(t => (
+                      <TableRow key={t.id} data-testid={`testimonial-row-${t.id}`}>
+                        <TableCell className="text-sm font-medium">{t.facility_name}</TableCell>
+                        <TableCell className="max-w-sm"><p className="text-sm text-slate-700 line-clamp-2">&ldquo;{t.quote}&rdquo;</p></TableCell>
+                        <TableCell className="text-sm">{t.author_name ? `${t.author_name}${t.author_title ? `, ${t.author_title}` : ''}` : <span className="text-slate-400">—</span>}</TableCell>
+                        <TableCell>
+                          <Badge className={t.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : t.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'}>
+                            {t.status}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-xs text-slate-500">{new Date(t.updated_at).toLocaleString()}</TableCell>
+                        <TableCell className="text-right space-x-2">
+                          {t.status !== 'approved' && (
+                            <Button size="sm" className="bg-emerald-600 hover:bg-emerald-700 h-8" onClick={() => moderateTestimonial(t.id, 'approved')} data-testid={`approve-testimonial-${t.id}-btn`}>
+                              Approve
+                            </Button>
+                          )}
+                          {t.status !== 'rejected' && (
+                            <Button size="sm" variant="outline" className="text-red-600 h-8" onClick={() => moderateTestimonial(t.id, 'rejected')} data-testid={`reject-testimonial-${t.id}-btn`}>
+                              Reject
+                            </Button>
+                          )}
                         </TableCell>
                       </TableRow>
                     ))}

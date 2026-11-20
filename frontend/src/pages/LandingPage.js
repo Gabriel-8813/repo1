@@ -17,9 +17,11 @@ const LandingPage = () => {
   const navigate = useNavigate();
   const [network, setNetwork] = useState(null);
   const [sealCode, setSealCode] = useState('');
+  const [testimonials, setTestimonials] = useState([]);
 
   useEffect(() => {
     axios.get(`${API}/public/network`).then((r) => setNetwork(r.data)).catch(() => {});
+    axios.get(`${API}/public/testimonials`).then((r) => setTestimonials(r.data.testimonials || [])).catch(() => {});
   }, []);
 
   const permits = [
@@ -306,6 +308,44 @@ const LandingPage = () => {
           </div>
         </div>
       </section>
+
+      {/* Pharmacy Testimonials */}
+      {testimonials.length > 0 && (
+        <section id="testimonials" className="py-20 px-6 bg-slate-100">
+          <div className="max-w-7xl mx-auto">
+            <div className="text-center mb-12">
+              <Badge className="bg-emerald-100 text-emerald-700 border-emerald-200 mb-4">From Our Partner Pharmacies</Badge>
+              <h2 className="font-archivo font-bold text-3xl md:text-4xl text-slate-900 mb-4">
+                Trusted by the people who dispense your medication
+              </h2>
+              <p className="text-slate-600 max-w-2xl mx-auto">
+                Every quote below comes from a verified partner with real sealed deliveries on MediTrans.
+              </p>
+            </div>
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6" data-testid="testimonials-grid">
+              {testimonials.map((t, i) => (
+                <Card key={i} className="border-0 shadow-[0_2px_10px_rgba(0,0,0,0.07)] p-6 flex flex-col" data-testid={`testimonial-card-${i}`}>
+                  <p className="text-slate-700 text-sm leading-relaxed flex-1">&ldquo;{t.quote}&rdquo;</p>
+                  <div className="flex items-center gap-3 mt-5 pt-4 border-t border-slate-100">
+                    <div className="w-10 h-10 bg-blue-100 rounded-full flex items-center justify-center shrink-0">
+                      <Store className="w-5 h-5 text-blue-600" />
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-slate-900 truncate">
+                        {t.author_name ? `${t.author_name}${t.author_title ? `, ${t.author_title}` : ''}` : t.facility_name}
+                      </p>
+                      <p className="text-xs text-slate-500 truncate">
+                        {t.author_name ? `${t.facility_name} · ` : ''}{t.city}
+                        {t.deliveries > 0 && <span className="text-emerald-600 font-medium"> · {t.deliveries} verified deliveries</span>}
+                      </p>
+                    </div>
+                  </div>
+                </Card>
+              ))}
+            </div>
+          </div>
+        </section>
+      )}
 
       {/* Pricing Section */}
       <section id="pricing" className="py-20 px-6">

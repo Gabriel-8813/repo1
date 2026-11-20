@@ -456,6 +456,14 @@ class RouteAccept(BaseModel):
 class StormReadyUpdate(BaseModel):
     storm_ready: bool
 
+class TestimonialSubmit(BaseModel):
+    quote: str = Field(min_length=10, max_length=280)
+    author_name: Optional[str] = Field(default=None, max_length=80)
+    author_title: Optional[str] = Field(default=None, max_length=80)
+
+class TestimonialModerate(BaseModel):
+    status: str  # approved | rejected
+
 # Auth helpers
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
@@ -2131,6 +2139,88 @@ async def public_verify_seal(seal_code: str, request: Request):
             "timestamp": e["timestamp"]
         } for e in seal_events]
     }
+
+# ---- Pharmacy Testimonials (social proof) ----
+async def _facility_delivered_count(facility_id: str) -> int:
+    return await db.jobs.count_documents({"facility_id": facility_id, "status": {"$in": ["delivered", "completed"]}})
+
+@api_router.post("/facility/testimonial")
+async def submit_testimonial(payload: TestimonialSubmit, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "facility":
+        raise HTTPException(status_code=403, detail="Facility access required")
+    facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0})
+    if not facility:
+        raise HTTPException(status_code=400, detail="Set up your facility profile first")
+    delivered = await _facility_delivered_count(facility["id"])
+    if delivered < 1:
+        raise HTTPException(status_code=400, detail="Testimonials unlock after your first verified delivery")
+    now = datetime.now(timezone.utc).isoformat()
+    existing = await db.testimonials.find_one({"facility_id": facility["id"]}, {"_id": 0})
+    doc = {
+        "id": existing["id"] if existing else str(uuid.uuid4()),
+        "facility_id": facility["id"],
+        "quote": payload.quote.strip(),
+        "author_name": (payload.author_name or "").strip() or None,
+        "author_title": (payload.author_title or "").strip() or None,
+        "status": "pending",
+        "created_at": existing["created_at"] if existing else now,
+        "updated_at": now
+    }
+    await db.testimonials.update_one({"facility_id": facility["id"]}, {"$set": doc}, upsert=True)
+    await log_audit(current_user, "submit", "testimonial", doc["id"])
+    return {"testimonial": doc}
+
+@api_router.get("/facility/testimonial")
+async def get_my_testimonial(current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "facility":
+        raise HTTPException(status_code=403, detail="Facility access required")
+    facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0, "id": 1})
+    if not facility:
+        return {"testimonial": None, "eligible": False}
+    t = await db.testimonials.find_one({"facility_id": facility["id"]}, {"_id": 0})
+    delivered = await _facility_delivered_count(facility["id"])
+    return {"testimonial": t, "eligible": delivered >= 1, "delivered_count": delivered}
+
+@api_router.get("/admin/testimonials")
+async def admin_list_testimonials(admin: dict = Depends(require_admin)):
+    items = await db.testimonials.find({}, {"_id": 0}).sort("updated_at", -1).to_list(200)
+    fac_ids = list({t["facility_id"] for t in items})
+    names = {}
+    async for f in db.facilities.find({"id": {"$in": fac_ids}}, {"_id": 0, "id": 1, "name": 1}):
+        names[f["id"]] = f["name"]
+    return {"testimonials": [{**t, "facility_name": names.get(t["facility_id"], "Unknown facility")} for t in items]}
+
+@api_router.put("/admin/testimonials/{testimonial_id}")
+async def moderate_testimonial(testimonial_id: str, payload: TestimonialModerate, admin: dict = Depends(require_admin)):
+    if payload.status not in ("approved", "rejected"):
+        raise HTTPException(status_code=422, detail="status must be 'approved' or 'rejected'")
+    result = await db.testimonials.update_one(
+        {"id": testimonial_id},
+        {"$set": {"status": payload.status, "moderated_at": datetime.now(timezone.utc).isoformat(), "moderated_by": admin["id"]}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Testimonial not found")
+    await log_audit(admin, payload.status, "testimonial", testimonial_id)
+    return {"id": testimonial_id, "status": payload.status}
+
+@api_router.get("/public/testimonials")
+async def public_testimonials():
+    items = await db.testimonials.find({"status": "approved"}, {"_id": 0}).sort("updated_at", -1).to_list(12)
+    out = []
+    for t in items:
+        fac = await db.facilities.find_one({"id": t["facility_id"]}, {"_id": 0, "name": 1, "type": 1, "city": 1, "address": 1})
+        if not fac:
+            continue
+        out.append({
+            "quote": t["quote"],
+            "author_name": t.get("author_name"),
+            "author_title": t.get("author_title"),
+            "facility_name": fac["name"],
+            "facility_type": fac.get("type"),
+            "city": _clean_city(fac.get("city")) or _clean_city(_city_of(fac.get("address") or "")) or "Ontario",
+            "deliveries": await _facility_delivered_count(t["facility_id"])
+        })
+    return {"testimonials": out}
 
 @api_router.post("/jobs/{job_id}/accept")
 async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):

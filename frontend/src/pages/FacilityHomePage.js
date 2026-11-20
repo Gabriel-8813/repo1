@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
-import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage, Receipt, Download, ShieldCheck, HeartHandshake, CloudSnow, Copy } from 'lucide-react';
+import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage, Receipt, Download, ShieldCheck, HeartHandshake, CloudSnow, Copy, Quote } from 'lucide-react';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { toast } from 'sonner';
@@ -61,6 +61,42 @@ export default function FacilityHomePage() {
   const [busy, setBusy] = useState(false);
   const [billMonth, setBillMonth] = useState(new Date().toISOString().slice(0, 7));
   const [statement, setStatement] = useState(null);
+  const [testi, setTesti] = useState(null);
+  const [testiForm, setTestiForm] = useState({ quote: '', author_name: '', author_title: '' });
+  const [testiBusy, setTestiBusy] = useState(false);
+  const [editingTesti, setEditingTesti] = useState(false);
+
+  useEffect(() => {
+    if (!token) return;
+    axios.get(`${API}/facility/testimonial`, { headers })
+      .then((r) => {
+        setTesti(r.data);
+        if (r.data.testimonial) setTestiForm({
+          quote: r.data.testimonial.quote || '',
+          author_name: r.data.testimonial.author_name || '',
+          author_title: r.data.testimonial.author_title || ''
+        });
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, deliveries.length]);
+
+  const submitTestimonial = async (e) => {
+    e.preventDefault();
+    setTestiBusy(true);
+    try {
+      const r = await axios.post(`${API}/facility/testimonial`, {
+        quote: testiForm.quote,
+        author_name: testiForm.author_name || undefined,
+        author_title: testiForm.author_title || undefined
+      }, { headers });
+      setTesti((s) => ({ ...s, testimonial: r.data.testimonial }));
+      setEditingTesti(false);
+      toast.success('Thanks! Your testimonial was submitted and will appear on the MediTrans homepage once approved.');
+    } catch (err) {
+      toast.error(err.response?.data?.detail || 'Could not submit testimonial');
+    } finally { setTestiBusy(false); }
+  };
 
   useEffect(() => {
     if (!token) return;
@@ -285,6 +321,52 @@ export default function FacilityHomePage() {
                   </form>
                 </CardContent>
               </Card>
+
+              {/* Share your experience — unlocks after first verified delivery */}
+              {testi?.eligible && (
+                <Card className="border border-emerald-200 bg-emerald-50/40 mt-4" data-testid="testimonial-card">
+                  <CardContent className="p-5">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Quote className="w-4 h-4 text-emerald-600" />
+                      <h3 className="font-archivo font-bold text-slate-900">Share your experience</h3>
+                    </div>
+                    {testi.testimonial && !editingTesti ? (
+                      <>
+                        <p className="text-sm text-slate-700 italic mb-2">&ldquo;{testi.testimonial.quote}&rdquo;</p>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <Badge className={testi.testimonial.status === 'approved' ? 'bg-emerald-100 text-emerald-700' : testi.testimonial.status === 'rejected' ? 'bg-red-100 text-red-700' : 'bg-amber-100 text-amber-700'} data-testid="testimonial-status-badge">
+                            {testi.testimonial.status === 'approved' ? 'Live on homepage' : testi.testimonial.status === 'rejected' ? 'Not approved — edit & resubmit' : 'Awaiting review'}
+                          </Badge>
+                          <Button size="sm" variant="outline" className="rounded-full h-8" onClick={() => setEditingTesti(true)} data-testid="edit-testimonial-btn">Edit</Button>
+                        </div>
+                      </>
+                    ) : (
+                      <form onSubmit={submitTestimonial} className="space-y-3">
+                        <p className="text-xs text-slate-500">Tell other pharmacies about your MediTrans experience — it appears on our homepage after a quick review.</p>
+                        <Textarea required minLength={10} maxLength={280} rows={3}
+                          placeholder="e.g. Our patients love the seal codes — refills arrive same-day, sealed and verified."
+                          value={testiForm.quote} onChange={(e) => setTestiForm({ ...testiForm, quote: e.target.value })}
+                          data-testid="testimonial-quote-input" />
+                        <div className="grid grid-cols-2 gap-2">
+                          <Input placeholder="Your name (optional)" value={testiForm.author_name}
+                            onChange={(e) => setTestiForm({ ...testiForm, author_name: e.target.value })} data-testid="testimonial-author-input" />
+                          <Input placeholder="Title, e.g. Pharmacist (optional)" value={testiForm.author_title}
+                            onChange={(e) => setTestiForm({ ...testiForm, author_title: e.target.value })} data-testid="testimonial-title-input" />
+                        </div>
+                        <div className="flex gap-2">
+                          <Button type="submit" disabled={testiBusy || testiForm.quote.trim().length < 10}
+                            className="flex-1 rounded-full bg-emerald-600 hover:bg-emerald-700 h-10" data-testid="submit-testimonial-btn">
+                            {testiBusy ? 'Submitting…' : testi.testimonial ? 'Resubmit' : 'Submit testimonial'}
+                          </Button>
+                          {testi.testimonial && (
+                            <Button type="button" variant="outline" className="rounded-full h-10" onClick={() => setEditingTesti(false)}>Cancel</Button>
+                          )}
+                        </div>
+                      </form>
+                    )}
+                  </CardContent>
+                </Card>
+              )}
             </div>
 
             {/* My Deliveries dashboard */}
