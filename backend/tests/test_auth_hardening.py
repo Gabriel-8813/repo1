@@ -32,4 +32,7 @@ def test_brute_force_lockout_after_5_failures():
         codes.append(r.status_code)
     # valid password must still work if no lockout implemented
     ok = requests.post(f"{API}/auth/login", json={"email": "facility1@test.com", "password": "Facility@123"}, timeout=30)
+    # clear lockout state so later test files can log in
+    client = MongoClient(benv["MONGO_URL"])
+    client[benv["DB_NAME"]].login_attempts.delete_many({"identifier": {"$regex": "facility1@test.com$"}})
     assert 423 in codes or 429 in codes, f"no lockout implemented; codes={codes}, valid-login-after={ok.status_code}"

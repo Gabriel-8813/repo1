@@ -34,7 +34,7 @@ export default function PrivacyPolicyPage() {
         <Section icon={MapPin} title="Data residency">
           <p>Sensitive recipient fields are encrypted at rest and access is role-restricted and audit-logged. Some service providers that MediTrans relies on may process data outside Canada: payment processing (Stripe), file storage (Emergent object storage), transactional email (Resend), SMS notifications (Twilio) and address geocoding (OpenStreetMap Nominatim). We share only the minimum data each provider needs to perform its function. By using MediTrans you consent to this processing; details are available from our privacy contact below.</p>
         </Section>
-        <p className="text-xs text-slate-400 mt-6">MediTrans Canada · Privacy contact: support@meditranscanada.com — use this address for data access, correction, deletion requests or privacy complaints. Account deletion can also be requested from your profile in the app or at /delete-account.</p>
+        <p className="text-xs text-slate-400 mt-6">MediTrans Canada · Privacy contact: support@meditranscanada.com — use this address for data access, correction, deletion requests or privacy complaints. Account deletion is available in the app from the Billing / account area, or any time at /delete-account.</p>
       </div>
     </div>
   );

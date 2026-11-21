@@ -476,6 +476,12 @@ const BillingPage = () => {
             )}
           </CardContent>
         </Card>
+
+        <p className="text-center mt-8">
+          <Link to="/delete-account" className="text-xs text-slate-400 hover:text-red-600 underline" data-testid="delete-account-link">
+            Delete my account
+          </Link>
+        </p>
       </main>
     </div>
   );

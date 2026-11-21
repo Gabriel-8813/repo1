@@ -147,8 +147,11 @@ export default function FacilityHomePage() {
           return;
         }
       } catch { /* keep polling */ }
-      if (++attempts < 8) setTimeout(poll, 2000);
-      else window.history.replaceState({}, '', '/facility');
+      if (++attempts < 30) setTimeout(poll, 2000);
+      else {
+        toast.info('Payment is still processing — your statement will show as paid once Stripe confirms it.');
+        window.history.replaceState({}, '', '/facility');
+      }
     };
     poll();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -524,10 +527,10 @@ export default function FacilityHomePage() {
                       <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold" data-testid="statement-paid-badge">
                         <ShieldCheck className="w-3.5 h-3.5" /> Paid
                       </span>
-                    ) : statement?.total > 0 && (
+                    ) : statement?.due_total > 0 && (
                       <Button size="sm" className="rounded-full bg-emerald-600 hover:bg-emerald-700" disabled={payingStatement}
                         onClick={payStatement} data-testid="pay-statement-btn">
-                        {payingStatement ? 'Redirecting…' : `Pay $${statement.total.toFixed(2)}`}
+                        {payingStatement ? 'Redirecting…' : `Pay $${statement.due_total.toFixed(2)}`}
                       </Button>
                     )}
                     <Button size="sm" variant="outline" className="rounded-full" onClick={() => exportStatement('csv')} data-testid="export-csv-btn">
@@ -569,6 +572,9 @@ export default function FacilityHomePage() {
                           <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">Subtotal</td><td className="px-4 py-2 text-right font-medium" data-testid="billing-subtotal">${statement.subtotal.toFixed(2)}</td></tr>
                           <tr><td colSpan="3" className="px-4 py-2 text-right text-slate-500">HST (13%)</td><td className="px-4 py-2 text-right font-medium" data-testid="billing-hst">${statement.hst.toFixed(2)}</td></tr>
                           <tr className="border-t border-slate-200"><td colSpan="3" className="px-4 py-3 text-right font-archivo font-bold text-slate-900">Total (CAD)</td><td className="px-4 py-3 text-right font-archivo font-bold text-lg" data-testid="billing-total">${statement.total.toFixed(2)}</td></tr>
+                          {statement.due_total > 0 && statement.due_total < statement.total && (
+                            <tr><td colSpan="3" className="px-4 py-2 text-right text-emerald-700 font-medium">Remaining due</td><td className="px-4 py-2 text-right font-bold text-emerald-700" data-testid="billing-due">${statement.due_total.toFixed(2)}</td></tr>
+                          )}
                         </tfoot>
                       </table>
                     </CardContent>
@@ -577,6 +583,12 @@ export default function FacilityHomePage() {
               </div>
             </TabsContent>
           </Tabs>
+
+          <p className="text-center mt-8">
+            <a href="/delete-account" className="text-xs text-slate-400 hover:text-red-600 underline" data-testid="delete-account-link">
+              Delete my account
+            </a>
+          </p>
         )}
       </main>
 

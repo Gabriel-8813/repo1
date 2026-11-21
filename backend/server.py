@@ -1354,6 +1354,10 @@ async def _transfer_pending_payouts(job_ids: list):
         acct = rec.get("stripe_account_id") if rec else None
         if not acct:
             continue  # pays out automatically once the driver completes Connect onboarding
+        # Atomic per-payout claim so concurrent settles can never double-transfer
+        claim = await db.ledger.update_one({"id": p["id"], "status": "pending"}, {"$set": {"status": "processing"}})
+        if claim.modified_count == 0:
+            continue
         try:
             transfer = await asyncio.to_thread(
                 stripe.Transfer.create,
@@ -1361,17 +1365,24 @@ async def _transfer_pending_payouts(job_ids: list):
                 currency="cad",
                 destination=acct,
                 transfer_group=p["job_id"],
-                description=f"MediTrans net payout — job {p['job_id'][:8]}"
+                description=f"MediTrans net payout — job {p['job_id'][:8]}",
+                idempotency_key=f"payout-{p['id']}"
             )
-            await db.ledger.update_one({"id": p["id"], "status": "pending"},
+            await db.ledger.update_one({"id": p["id"]},
                                        {"$set": {"status": "paid", "paid_at": now_iso, "stripe_transfer_id": transfer.id}})
         except Exception as e:
+            await db.ledger.update_one({"id": p["id"], "status": "processing"}, {"$set": {"status": "pending"}})
             logging.getLogger(__name__).error(f"Driver payout transfer failed for {p['id']}: {e}")
 
 async def _settle_ledger_for_session(session_id: str):
     """Finalize a paid payment_transaction: settle owed ledger entries OR credit a tip to driver earnings."""
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
     if not tx or tx.get("payment_status") != "paid":
+        return
+    # Atomic settlement claim — webhook and status-poll can race; only one settles
+    claim = await db.payment_transactions.update_one(
+        {"session_id": session_id, "settled": {"$ne": True}}, {"$set": {"settled": True}})
+    if claim.modified_count == 0:
         return
     payment_type = tx.get("payment_type")
     now_iso = datetime.now(timezone.utc).isoformat()
@@ -1385,24 +1396,31 @@ async def _settle_ledger_for_session(session_id: str):
             )
     elif payment_type == "facility_statement":
         facility_id, month = tx.get("facility_id"), tx.get("month")
-        if await db.facility_payments.find_one({"facility_id": facility_id, "month": month, "status": "paid"}, {"_id": 1}):
-            return  # idempotent
-        await db.facility_payments.insert_one({
-            "id": str(uuid.uuid4()),
-            "facility_id": facility_id,
-            "month": month,
-            "amount": float(tx.get("amount", 0)),
-            "session_id": session_id,
-            "status": "paid",
-            "paid_at": now_iso
-        })
-        # Facility has paid — release driver net payouts for that month via Stripe Connect transfers
-        jobs = await db.jobs.find({"facility_id": facility_id, "status": {"$in": ["delivered", "completed"]}}, {"_id": 0, "id": 1, "delivered_at": 1, "completed_at": 1}).to_list(1000)
-        job_ids = [j["id"] for j in jobs if (j.get("delivered_at") or j.get("completed_at") or "").startswith(month)]
+        await db.facility_payments.update_one(
+            {"session_id": session_id},
+            {"$setOnInsert": {
+                "id": str(uuid.uuid4()),
+                "facility_id": facility_id,
+                "month": month,
+                "amount": float(tx.get("amount", 0)),
+                "session_id": session_id,
+                "status": "paid",
+                "paid_at": now_iso
+            }},
+            upsert=True)
+        # Facility has paid — release driver net payouts for the covered jobs via Stripe Connect transfers
+        job_ids = tx.get("job_ids")
+        if not job_ids:  # legacy transactions without job scoping: fall back to whole month
+            jobs = await db.jobs.find({"facility_id": facility_id, "status": {"$in": ["delivered", "completed"]}}, {"_id": 0, "id": 1, "delivered_at": 1, "completed_at": 1}).to_list(1000)
+            job_ids = [j["id"] for j in jobs if (j.get("delivered_at") or j.get("completed_at") or "").startswith(month)]
         if job_ids:
             await db.jobs.update_many({"id": {"$in": job_ids}}, {"$set": {"facility_paid": True, "facility_paid_at": now_iso}})
             await db.ledger.update_many({"job_id": {"$in": job_ids}, "type": "commission", "status": "accrued"},
                                         {"$set": {"status": "paid", "paid_at": now_iso, "payment_session_id": session_id}})
+            # Legacy model cleanup: waive old driver-owed commissions on jobs the facility has now paid for
+            await db.ledger.update_many({"job_id": {"$in": job_ids}, "type": "commission", "status": "owed"},
+                                        {"$set": {"status": "paid", "paid_at": now_iso, "payment_session_id": session_id,
+                                                  "waived_reason": "covered by facility statement payment"}})
             await _transfer_pending_payouts(job_ids)
     elif payment_type == "tip":
         # Credit 100% of tip to the driver's earnings (no platform commission on tips)
@@ -3935,11 +3953,14 @@ async def _facility_statement(user: dict, month: str):
             "title": j.get("title") or "Medical transport",
             "recipient_name": dec_pii(j.get("recipient_name")),
             "dropoff_address": j.get("delivery_address"),
-            "amount": round(float(j.get("payout_amount") or j.get("offered_price") or 0), 2)
+            "amount": round(float(j.get("payout_amount") or j.get("offered_price") or 0), 2),
+            "paid": bool(j.get("facility_paid"))
         })
     items.sort(key=lambda i: i["date"])
     subtotal = round(sum(i["amount"] for i in items), 2)
     hst = round(subtotal * HST_RATE, 2)
+    due_subtotal = round(sum(i["amount"] for i in items if not i["paid"]), 2)
+    due_hst = round(due_subtotal * HST_RATE, 2)
     return {
         "month": month,
         "facility": {"name": facility.get("name"), "address": facility.get("address"), "billing_email": facility.get("billing_email")} if facility else None,
@@ -3948,6 +3969,9 @@ async def _facility_statement(user: dict, month: str):
         "hst_rate": HST_RATE,
         "hst": hst,
         "total": round(subtotal + hst, 2),
+        "due_subtotal": due_subtotal,
+        "due_hst": due_hst,
+        "due_total": round(due_subtotal + due_hst, 2),
         "currency": "CAD"
     }
 
@@ -3959,8 +3983,8 @@ async def facility_billing(month: Optional[str] = None, current_user: dict = Dep
         fac = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0, "id": 1})
         if fac:
             payment = await db.facility_payments.find_one(
-                {"facility_id": fac["id"], "month": month, "status": "paid"}, {"_id": 0})
-            st["paid"] = bool(payment)
+                {"facility_id": fac["id"], "month": month, "status": "paid"}, {"_id": 0}, sort=[("paid_at", -1)])
+            st["paid"] = bool(st["items"]) and all(i["paid"] for i in st["items"])
             st["paid_at"] = payment.get("paid_at") if payment else None
     return st
 
@@ -3976,12 +4000,13 @@ async def pay_facility_statement(req: FacilityPayRequest, request: Request, curr
     fac = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0, "id": 1})
     if not fac:
         raise HTTPException(status_code=400, detail="Set up your facility profile first")
-    total = round(float(st.get("total") or 0), 2)
-    if total <= 0:
+    total = round(float(st.get("due_total") or 0), 2)
+    unpaid_job_ids = [i["job_id"] for i in st["items"] if not i["paid"]]
+    if total <= 0 or not unpaid_job_ids:
+        if st["items"] and all(i["paid"] for i in st["items"]):
+            raise HTTPException(status_code=400, detail="This statement has already been paid")
         raise HTTPException(status_code=400, detail="Nothing to pay for this month")
     facility_id = fac["id"]
-    if await db.facility_payments.find_one({"facility_id": facility_id, "month": req.month, "status": "paid"}, {"_id": 1}):
-        raise HTTPException(status_code=400, detail="This statement has already been paid")
 
     host_url = str(request.base_url).rstrip('/')
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{host_url}/api/webhook/stripe")
@@ -4000,6 +4025,7 @@ async def pay_facility_statement(req: FacilityPayRequest, request: Request, curr
         "payment_type": "facility_statement",
         "facility_id": facility_id,
         "month": req.month,
+        "job_ids": unpaid_job_ids,
         "amount": total,
         "currency": "cad",
         "status": "pending",
@@ -4899,6 +4925,12 @@ async def startup_event():
     except Exception as e:
         logger.error(f"Object storage init failed: {e}")
     # Email hygiene: normalize to lowercase, then enforce uniqueness
+    # Idempotent permit correction (CVOR is conditional in Ontario — cars/minivans exempt)
+    await db.permits.update_one({"id": "cvor"}, {"$set": {
+        "required": False,
+        "description": "Only required for trucks over 4,500 kg registered gross weight, buses and tow trucks — standard cars, SUVs and minivans are exempt"
+    }})
+    await db.facility_payments.create_index("session_id", unique=True)
     try:
         async for u in db.users.find({"$expr": {"$ne": ["$email", {"$toLower": "$email"}]}}, {"_id": 0, "id": 1, "email": 1}):
             lower = u["email"].lower().strip()
