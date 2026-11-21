@@ -64,7 +64,8 @@ const TipPage = () => {
       await axios.post(`${API}/reviews/${jobId}`, {
         rating: postTipRating,
         comment: postTipComment || null,
-        reviewer_name: tipperName || null
+        reviewer_name: tipperName || null,
+        confirm_token: searchParams.get('t') || null
       });
       setPostTipDone(true);
       toast.success('Thanks for your review!');

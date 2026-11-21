@@ -11,6 +11,7 @@ import {
 } from './ui/table';
 import { Search, FileDown, ShieldAlert, FileWarning, Trash2, Siren, Download } from 'lucide-react';
 import { toast } from 'sonner';
+import { openSecureUrl } from '../lib/downloadToken';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
@@ -135,7 +136,7 @@ export const AdminComplianceTab = () => {
 
   const exportCustody = (jobId) => {
     if (!jobId) { toast.error('Enter a job ID'); return; }
-    window.open(`${API}/jobs/${jobId}/custody-record/pdf?auth=${token}`, '_blank');
+    openSecureUrl(`${API}/jobs/${jobId}/custody-record/pdf`);
   };
 
   return (
@@ -374,7 +375,7 @@ export const AdminComplianceTab = () => {
             <div className="flex gap-2">
               <Button size="sm" className="rounded-full bg-blue-600 hover:bg-blue-700 flex-1" onClick={compileBreach} data-testid="breach-compile-btn">Compile</Button>
               {breach && (
-                <Button size="sm" variant="outline" className="rounded-full" onClick={() => window.open(`${API}/admin/compliance/breach-report?date_from=${breachRange.date_from}&date_to=${breachRange.date_to}&format=csv&auth=${token}`, '_blank')} data-testid="breach-csv-btn">
+                <Button size="sm" variant="outline" className="rounded-full" onClick={() => openSecureUrl(`${API}/admin/compliance/breach-report?date_from=${breachRange.date_from}&date_to=${breachRange.date_to}&format=csv`)} data-testid="breach-csv-btn">
                   <Download className="w-4 h-4" />
                 </Button>
               )}

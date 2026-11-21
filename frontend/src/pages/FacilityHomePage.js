@@ -9,6 +9,7 @@ import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
 import { Textarea } from '../components/ui/textarea';
 import { Truck, LogOut, Building2, Send, MapPin, AlertTriangle, Star, Navigation2, FileImage, Receipt, Download, ShieldCheck, HeartHandshake, CloudSnow, Copy, Quote } from 'lucide-react';
+import { getDownloadToken, openSecureUrl } from '../lib/downloadToken';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { toast } from 'sonner';
@@ -61,6 +62,14 @@ export default function FacilityHomePage() {
   const [busy, setBusy] = useState(false);
   const [billMonth, setBillMonth] = useState(new Date().toISOString().slice(0, 7));
   const [statement, setStatement] = useState(null);
+  const [dlToken, setDlToken] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    getDownloadToken().then(setDlToken).catch(() => {});
+    const iv = setInterval(() => getDownloadToken().then(setDlToken).catch(() => {}), 4 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [token]);
   const [testi, setTesti] = useState(null);
   const [testiForm, setTestiForm] = useState({ quote: '', author_name: '', author_title: '' });
   const [testiBusy, setTestiBusy] = useState(false);
@@ -107,7 +116,7 @@ export default function FacilityHomePage() {
   }, [billMonth, token, deliveries.length]);
 
   const exportStatement = (fmt) => {
-    window.open(`${API}/facility/billing/export?month=${billMonth}&format=${fmt}&auth=${token}`, '_blank');
+    openSecureUrl(`${API}/facility/billing/export?month=${billMonth}&format=${fmt}`);
   };
 
   const load = useCallback(async () => {
@@ -542,10 +551,10 @@ export default function FacilityHomePage() {
                   <p><span className="text-slate-400 text-xs uppercase tracking-wide">Delivered at</span><br /><span className="font-medium text-slate-800" data-testid="pod-timestamp">{new Date(del.timestamp).toLocaleString('en-CA')}</span></p>
                   {del.gps_lat != null && <p className="text-xs text-slate-400">GPS {del.gps_lat.toFixed(5)}, {del.gps_lng.toFixed(5)}</p>}
                 </div>
-                {del.evidence_url && (
+                {del.evidence_url && dlToken && (
                   <div>
                     <p className="text-xs text-slate-400 mb-1">Signature / ID capture evidence</p>
-                    <img src={`${process.env.REACT_APP_BACKEND_URL}${del.evidence_url}?auth=${token}`} alt="Proof of delivery evidence"
+                    <img src={`${process.env.REACT_APP_BACKEND_URL}${del.evidence_url}?auth=${dlToken}`} alt="Proof of delivery evidence"
                       className="rounded-lg border border-slate-200 w-full bg-white" data-testid="pod-evidence-image" />
                   </div>
                 )}

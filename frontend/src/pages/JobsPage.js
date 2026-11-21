@@ -167,8 +167,8 @@ const JobsPage = () => {
     }
   };
 
-  const copyTipLink = async (jobId) => {
-    const url = `${window.location.origin}/tip/${jobId}`;
+  const copyTipLink = async (job) => {
+    const url = `${window.location.origin}/tip/${job.id}${job.confirm_token ? `?t=${job.confirm_token}` : ''}`;
     try {
       await navigator.clipboard.writeText(url);
       toast.success('Tip link copied — share it with your customer!');
@@ -577,7 +577,7 @@ const JobsPage = () => {
                                 variant="outline"
                                 size="sm"
                                 className="rounded-full border-pink-200 text-pink-600 hover:bg-pink-50"
-                                onClick={() => copyTipLink(job.id)}
+                                onClick={() => copyTipLink(job)}
                                 data-testid={`share-tip-link-${job.id}-btn`}
                               >
                                 <LinkIcon className="w-4 h-4 mr-2" /> Share Tip Link

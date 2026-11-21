@@ -5,6 +5,7 @@ import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
+import { openSecureUrl } from '../lib/downloadToken';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from './ui/table';
@@ -88,7 +89,7 @@ export const DriverVerificationTab = () => {
   };
 
   const viewDoc = (docId) => {
-    window.open(`${API}/driver-documents/${docId}/file?auth=${token}`, '_blank');
+    openSecureUrl(`${API}/driver-documents/${docId}/file`);
   };
 
   const confirmReject = async () => {

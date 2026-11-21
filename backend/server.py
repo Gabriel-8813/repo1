@@ -2,6 +2,7 @@ from fastapi import FastAPI, APIRouter, HTTPException, Depends, Request, UploadF
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
+from pymongo.errors import DuplicateKeyError
 import os
 import logging
 from pathlib import Path
@@ -41,6 +42,19 @@ stripe.api_key = STRIPE_API_KEY
 RESEND_API_KEY = os.environ.get('RESEND_API_KEY', '').strip()
 SENDER_EMAIL = os.environ.get('SENDER_EMAIL', 'onboarding@resend.dev').strip()
 RESET_LINK_BASE_URL = os.environ.get('RESET_LINK_BASE_URL', '').rstrip('/')
+ALLOWED_WEB_ORIGINS = {o.strip().rstrip('/') for o in os.environ.get('ALLOWED_WEB_ORIGINS', '').split(',') if o.strip()}
+
+def safe_origin(origin_url: str) -> str:
+    """Allow-list client-supplied origins used in Stripe redirect URLs (prevents open redirect)."""
+    origin = (origin_url or "").rstrip("/")
+    allowed = ALLOWED_WEB_ORIGINS | {RESET_LINK_BASE_URL, "https://meditranscanada.com", "https://www.meditranscanada.com",
+                                     "http://localhost:3000", "capacitor://localhost"}
+    allowed.discard("")
+    if origin in allowed:
+        return origin
+    if RESET_LINK_BASE_URL:
+        return RESET_LINK_BASE_URL
+    raise HTTPException(status_code=400, detail="Invalid origin")
 if RESEND_API_KEY:
     resend.api_key = RESEND_API_KEY
 
@@ -337,6 +351,7 @@ class ReviewCreate(BaseModel):
     rating: int = Field(ge=1, le=5)
     comment: Optional[str] = None
     reviewer_name: Optional[str] = None
+    confirm_token: Optional[str] = None
 
 # ---- Marketplace shared data model (enums + models) ----
 USER_ROLES = {"driver", "facility", "dispatcher", "admin"}
@@ -471,10 +486,12 @@ def hash_password(password: str) -> str:
 def verify_password(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
 
-def create_token(user_id: str, email: str) -> str:
+def create_token(user_id: str, email: str, token_version: int = 0) -> str:
     payload = {
         "user_id": user_id,
         "email": email,
+        "typ": "access",
+        "tv": int(token_version),
         "exp": datetime.now(timezone.utc) + timedelta(hours=JWT_EXPIRATION_HOURS)
     }
     return jwt.encode(payload, JWT_SECRET, algorithm=JWT_ALGORITHM)
@@ -487,14 +504,39 @@ async def get_current_user(request: Request):
     token = auth_header.split(" ")[1]
     try:
         payload = jwt.decode(token, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+        if payload.get("typ") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token")
         user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
         if not user:
             raise HTTPException(status_code=401, detail="User not found")
+        if int(payload.get("tv", 0)) != int(user.get("token_version", 0)):
+            raise HTTPException(status_code=401, detail="Session expired — please sign in again")
+        if user.get("status") == "suspended":
+            raise HTTPException(status_code=403, detail="Account suspended — contact the administrator")
         return user
     except jwt.ExpiredSignatureError:
         raise HTTPException(status_code=401, detail="Token expired")
     except jwt.InvalidTokenError:
         raise HTTPException(status_code=401, detail="Invalid token")
+
+async def user_from_download_token(auth: str) -> dict:
+    """Short-lived, download-scoped token for file/export links (never a session token)."""
+    try:
+        payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status_code=401, detail="Download link expired — refresh the page and try again")
+    except jwt.InvalidTokenError:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    if payload.get("typ") != "download":
+        raise HTTPException(status_code=401, detail="Invalid download token")
+    user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
+    if not user:
+        raise HTTPException(status_code=401, detail="User not found")
+    if int(payload.get("tv", 0)) != int(user.get("token_version", 0)):
+        raise HTTPException(status_code=401, detail="Session expired")
+    if user.get("status") == "suspended":
+        raise HTTPException(status_code=403, detail="Account suspended")
+    return user
 
 async def require_admin(current_user: dict = Depends(get_current_user)):
     if current_user.get("role") != "admin":
@@ -518,7 +560,7 @@ DRIVER_JOB_FIELDS = {
     "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id",
     "item_count", "requested_pickup_time", "recipient_name", "recipient_phone",
     "care_handoff", "storm_priority", "seal_code", "route_bundle", "bundle_bonus",
-    "seal_pickup_verified", "seal_delivery_verified"
+    "seal_pickup_verified", "seal_delivery_verified", "confirm_token"
 }
 
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
@@ -856,6 +898,22 @@ DOC_TO_DRIVER_FIELD = {
     "commercial_insurance": "insurance_status",
 }
 ALLOWED_UPLOAD_TYPES = {"image/jpeg", "image/png", "image/webp", "application/pdf", "image/heic"}
+
+def verify_file_signature(data: bytes, claimed_type: str):
+    """Check real file magic bytes against the browser-claimed content type."""
+    ok = False
+    if claimed_type == "image/jpeg":
+        ok = data[:3] == b"\xff\xd8\xff"
+    elif claimed_type == "image/png":
+        ok = data[:8] == b"\x89PNG\r\n\x1a\n"
+    elif claimed_type == "application/pdf":
+        ok = data[:4] == b"%PDF"
+    elif claimed_type == "image/webp":
+        ok = data[:4] == b"RIFF" and data[8:12] == b"WEBP"
+    elif claimed_type == "image/heic":
+        ok = len(data) > 12 and data[4:8] == b"ftyp"
+    if not ok:
+        raise HTTPException(status_code=422, detail="File contents don't match the declared file type")
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 
 async def ensure_driver_record(user_id: str) -> dict:
@@ -889,8 +947,10 @@ RESET_MAX_REQUESTS = 3
 RESET_WINDOW_MINUTES = 10
 
 def client_ip(request: Request) -> str:
-    xff = request.headers.get("x-forwarded-for")
-    return xff.split(",")[0].strip() if xff else (request.client.host if request.client else "unknown")
+    # Trust only proxy-set headers (Cloudflare / ingress), never client-supplied X-Forwarded-For
+    return (request.headers.get("cf-connecting-ip")
+            or request.headers.get("x-real-ip")
+            or (request.client.host if request.client else "unknown"))
 
 async def check_login_lockout(identifier: str):
     rec = await db.login_attempts.find_one({"identifier": identifier}, {"_id": 0})
@@ -918,35 +978,41 @@ async def check_reset_rate_limit(identifier: str):
 async def register(user_data: UserCreate):
     if not user_data.privacy_policy_accepted:
         raise HTTPException(status_code=422, detail="You must accept the privacy policy to create an account")
-    existing = await db.users.find_one({"email": user_data.email})
+    if len(user_data.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    email = user_data.email.lower().strip()
+    existing = await db.users.find_one({"email": email})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
     user_id = str(uuid.uuid4())
-    # Auto-promote creator admin based on ADMIN_EMAIL env
-    role = "admin" if ADMIN_EMAIL and user_data.email.lower().strip() == ADMIN_EMAIL else "driver"
+    role = "driver"
     user_doc = {
         "id": user_id,
-        "email": user_data.email,
+        "email": email,
         "password_hash": hash_password(user_data.password),
         "full_name": user_data.full_name,
         "phone": user_data.phone,
         "role": role,
         "status": "approved",
+        "token_version": 0,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "privacy_policy": {"version": PRIVACY_POLICY_VERSION, "accepted_at": datetime.now(timezone.utc).isoformat()},
         "driver_profile": None
     }
     
-    await db.users.insert_one(user_doc)
+    try:
+        await db.users.insert_one(user_doc)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Email already registered")
     
-    token = create_token(user_id, user_data.email)
+    token = create_token(user_id, email)
     return TokenResponse(
         access_token=token,
         token_type="bearer",
         user=UserResponse(
             id=user_id,
-            email=user_data.email,
+            email=email,
             full_name=user_data.full_name,
             phone=user_data.phone,
             role=role,
@@ -958,19 +1024,21 @@ async def register(user_data: UserCreate):
 
 @api_router.post("/auth/login", response_model=TokenResponse)
 async def login(credentials: UserLogin, request: Request):
-    identifier = f"{client_ip(request)}:{credentials.email.lower().strip()}"
-    await check_login_lockout(identifier)
-    user = await db.users.find_one({"email": credentials.email}, {"_id": 0})
+    email = credentials.email.lower().strip()
+    ip_identifier = f"{client_ip(request)}:{email}"
+    acct_identifier = f"acct:{email}"
+    await check_login_lockout(ip_identifier)
+    await check_login_lockout(acct_identifier)
+    user = await db.users.find_one({"email": email}, {"_id": 0})
     if not user or not verify_password(credentials.password, user["password_hash"]):
-        await record_failed_login(identifier)
+        await record_failed_login(ip_identifier)
+        await record_failed_login(acct_identifier)
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    await db.login_attempts.delete_one({"identifier": identifier})
+    if user.get("status") == "suspended":
+        raise HTTPException(status_code=403, detail="Account suspended — contact the administrator")
+    await db.login_attempts.delete_many({"identifier": {"$in": [ip_identifier, acct_identifier]}})
     
-    # Lazy auto-promote if ADMIN_EMAIL matches and user isn't admin yet
-    if ADMIN_EMAIL and user["email"].lower().strip() == ADMIN_EMAIL and user.get("role") != "admin":
-        await db.users.update_one({"id": user["id"]}, {"$set": {"role": "admin"}})
-        user["role"] = "admin"
-    token = create_token(user["id"], user["email"])
+    token = create_token(user["id"], user["email"], user.get("token_version", 0))
     return TokenResponse(
         access_token=token,
         token_type="bearer",
@@ -1016,9 +1084,9 @@ async def change_password(payload: PasswordChange, current_user: dict = Depends(
         raise HTTPException(status_code=400, detail="New password must be different from current")
     await db.users.update_one(
         {"id": current_user["id"]},
-        {"$set": {"password_hash": hash_password(payload.new_password)}}
+        {"$set": {"password_hash": hash_password(payload.new_password)}, "$inc": {"token_version": 1}}
     )
-    return {"status": "ok", "message": "Password updated"}
+    return {"status": "ok", "message": "Password updated — please sign in again"}
 
 # ======================
 # Forgot / Reset Password
@@ -1113,9 +1181,20 @@ async def reset_password(payload: PasswordResetConfirm):
         raise HTTPException(status_code=400, detail="Reset link has already been used")
     await db.users.update_one(
         {"id": user["id"]},
-        {"$set": {"password_hash": hash_password(payload.new_password)}}
+        {"$set": {"password_hash": hash_password(payload.new_password)}, "$inc": {"token_version": 1}}
     )
     return {"status": "ok", "message": "Password reset successfully"}
+
+@api_router.get("/auth/download-token")
+async def issue_download_token(current_user: dict = Depends(get_current_user)):
+    """Short-lived token used only for file/export links, so session JWTs never appear in URLs."""
+    token = jwt.encode({
+        "user_id": current_user["id"],
+        "typ": "download",
+        "tv": int(current_user.get("token_version", 0)),
+        "exp": datetime.now(timezone.utc) + timedelta(minutes=5)
+    }, JWT_SECRET, algorithm=JWT_ALGORITHM)
+    return {"token": token, "expires_in": 300}
 
 # Driver Profile Routes
 @api_router.get("/driver/profile")
@@ -1199,8 +1278,9 @@ async def create_balance_checkout(checkout_req: CheckoutRequest, request: Reques
     webhook_url = f"{host_url}/api/webhook/stripe"
     stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=webhook_url)
     
-    success_url = f"{checkout_req.origin_url}/billing?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{checkout_req.origin_url}/billing"
+    _origin = safe_origin(checkout_req.origin_url)
+    success_url = f"{_origin}/billing?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{_origin}/billing"
     
     checkout_request = CheckoutSessionRequest(
         amount=owed_total,
@@ -1399,8 +1479,9 @@ async def create_tip_checkout(job_id: str, req: TipCheckoutRequest, request: Req
     amount = round(float(req.amount), 2)
     amount_cents = int(round(amount * 100))
 
-    success_url = f"{req.origin_url}/tip/{job_id}?session_id={{CHECKOUT_SESSION_ID}}"
-    cancel_url = f"{req.origin_url}/tip/{job_id}"
+    _origin = safe_origin(req.origin_url)
+    success_url = f"{_origin}/tip/{job_id}?session_id={{CHECKOUT_SESSION_ID}}"
+    cancel_url = f"{_origin}/tip/{job_id}"
 
     # If driver is fully onboarded with Connect, use destination charge (split at source)
     connect_account_id = driver.get("stripe_account_id") if driver else None
@@ -1640,12 +1721,14 @@ async def get_review_info(job_id: str):
 
 @api_router.post("/reviews/{job_id}")
 async def submit_review(job_id: str, review: ReviewCreate):
-    """Public — customer submits a 1-5 rating + optional comment for a completed trip."""
+    """Public — recipient submits a 1-5 rating. Requires the confirm token from their delivery link."""
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Trip not found")
     if job.get("status") not in ("completed", "delivered"):
         raise HTTPException(status_code=400, detail="Only completed trips can be reviewed")
+    if not job.get("confirm_token") or review.confirm_token != job["confirm_token"]:
+        raise HTTPException(status_code=403, detail="This review link is invalid — use the link from your delivery confirmation message")
     driver_id = job.get("accepted_by")
     if not driver_id:
         raise HTTPException(status_code=400, detail="No driver on this trip")
@@ -1731,8 +1814,8 @@ async def start_connect_onboarding(req: ConnectOnboardRequest, current_user: dic
 
         account_link = stripe.AccountLink.create(
             account=account_id,
-            refresh_url=f"{req.origin_url}/billing?stripe_refresh=1",
-            return_url=f"{req.origin_url}/billing?stripe_return=1",
+            refresh_url=f"{safe_origin(req.origin_url)}/billing?stripe_refresh=1",
+            return_url=f"{safe_origin(req.origin_url)}/billing?stripe_return=1",
             type="account_onboarding"
         )
         return {"url": account_link.url, "account_id": account_id}
@@ -1815,6 +1898,15 @@ async def create_job(job: JobCreate, current_user: dict = Depends(get_current_us
         facility = await db.facilities.find_one({"id": data["facility_id"]}, {"_id": 0})
         if not facility:
             raise HTTPException(status_code=404, detail="Facility not found")
+        if current_user.get("role") == "facility":
+            if facility.get("owner_user_id") != current_user["id"]:
+                raise HTTPException(status_code=403, detail="Not your facility")
+            if facility.get("status") != "approved":
+                raise HTTPException(status_code=403, detail="Your facility must be approved by an administrator before booking transports")
+    elif current_user.get("role") == "facility":
+        facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0})
+        if not facility or facility.get("status") != "approved":
+            raise HTTPException(status_code=403, detail="Your facility must be approved by an administrator before booking transports")
     job_id = str(uuid.uuid4())
     job_doc = {
         "id": job_id,
@@ -2225,9 +2317,9 @@ async def public_testimonials():
 @api_router.post("/jobs/{job_id}/accept")
 async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)):
     role = current_user.get("role")
-    if role not in ("driver", "admin"):
+    if role != "driver":
         raise HTTPException(status_code=403, detail="Only drivers can accept jobs")
-    if role == "driver" and not await is_driver_verified(current_user["id"]):
+    if not await is_driver_verified(current_user["id"]):
         raise HTTPException(status_code=403, detail="You are not currently eligible for new jobs — check your verification status and insurance expiry.")
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
@@ -2236,8 +2328,12 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
     if job["status"] != "open" and not offered_to_me:
         raise HTTPException(status_code=400, detail="Job is no longer available")
     
-    await db.jobs.update_one(
-        {"id": job_id},
+    # Atomic claim — two drivers tapping Accept at once can't both win
+    result = await db.jobs.update_one(
+        {"id": job_id, "$or": [
+            {"status": "open"},
+            {"status": "offered", "assigned_driver_id": {"$in": [None, current_user["id"]]}}
+        ]},
         {"$set": {
             "status": "accepted",
             "accepted_by": current_user["id"],
@@ -2245,6 +2341,8 @@ async def accept_job(job_id: str, current_user: dict = Depends(get_current_user)
             "accepted_at": datetime.now(timezone.utc).isoformat()
         }}
     )
+    if result.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Another driver just accepted this job")
     await log_audit(current_user, "accept", "job", job_id)
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     await send_recipient_sms(updated_job, "assigned")
@@ -2306,7 +2404,10 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
         if base is None:
             base = round(float(job.get("payout_amount") or 0) - float(job.get("bundle_bonus") or 0), 2)
         reopen.update({"payout_amount": base, "offered_price": base, "route_bundle": False, "bundle_bonus": None})
-    await db.jobs.update_one({"id": job_id}, {"$set": reopen})
+    # Atomic reopen — races with a concurrent pickup lose cleanly
+    result = await db.jobs.update_one({"id": job_id, "status": job["status"]}, {"$set": reopen})
+    if result.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Job state just changed — refresh and try again")
     await log_audit(current_user, "cancel", "job", job_id)
     await notify_dispatchers("driver_cancelled", "Driver cancelled a job",
                              f"{current_user.get('full_name', 'A driver')} cancelled '{job.get('title') or 'a delivery'}'{' (late fee charged)' if charged else ''}.", job_id)
@@ -2338,19 +2439,23 @@ async def cancel_job(job_id: str, current_user: dict = Depends(get_current_user)
         "ledger_entry": ledger_entry
     }
 
+class AdminCompleteRequest(BaseModel):
+    reason: str = Field(min_length=5, max_length=500)
+
 @api_router.post("/jobs/{job_id}/complete")
-async def complete_job(job_id: str, current_user: dict = Depends(get_current_user)):
+async def complete_job(job_id: str, payload: AdminCompleteRequest, admin: dict = Depends(require_admin)):
+    """Admin-only manual settlement with a documented reason. Drivers must use the
+    chain-of-custody flow (pickup checklist -> delivered event with evidence)."""
     job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job["accepted_by"] != current_user["id"]:
-        raise HTTPException(status_code=403, detail="Only the assigned driver can complete this job")
     if job.get("status") not in ("accepted", "in_progress", "picked_up", "in_transit"):
         raise HTTPException(status_code=400, detail="Only active jobs can be completed")
-    
-    datetime.now(timezone.utc)
-    result = await settle_job_completion(job, current_user["id"], "completed")
-    await log_audit(current_user, "complete", "job", job_id)
+    driver_id = job.get("assigned_driver_id") or job.get("accepted_by")
+    if not driver_id:
+        raise HTTPException(status_code=400, detail="No driver on this job")
+    result = await settle_job_completion(job, driver_id, "completed")
+    await log_audit(admin, "admin_complete", "job", job_id, details={"reason": payload.reason})
     
     updated_job = await db.jobs.find_one({"id": job_id}, {"_id": 0})
     return {
@@ -2360,14 +2465,17 @@ async def complete_job(job_id: str, current_user: dict = Depends(get_current_use
 
 async def settle_job_completion(job: dict, driver_id: str, final_status: str = "completed") -> dict:
     now = datetime.now(timezone.utc)
-    await db.jobs.update_one(
-        {"id": job["id"]},
+    # Atomic status flip — a second concurrent settle finds no active job and aborts
+    flip = await db.jobs.update_one(
+        {"id": job["id"], "status": {"$in": ["accepted", "in_progress", "picked_up", "in_transit"]}},
         {"$set": {
             "status": final_status,
             "completed_at": now.isoformat(),
             "delivered_at": now.isoformat()
         }}
     )
+    if flip.modified_count == 0:
+        raise HTTPException(status_code=409, detail="Job is already settled")
     await db.drivers.update_one({"user_id": driver_id}, {"$inc": {"total_trips": 1}})
     
     # Record gross earnings (what the driver charged the customer)
@@ -2400,7 +2508,10 @@ async def settle_job_completion(job: dict, driver_id: str, final_status: str = "
         "description": f"{commission_rate * 100:.0f}% platform commission on trip ${gross:.2f}",
         "created_at": now.isoformat()
     }
-    await db.ledger.insert_one(ledger_entry)
+    try:
+        await db.ledger.insert_one(ledger_entry)
+    except DuplicateKeyError:
+        logging.getLogger(__name__).warning(f"Commission already recorded for job {job['id']}")
     return {
         "gross_earnings": gross,
         "commission_charged": commission_amount,
@@ -2492,7 +2603,10 @@ async def admin_update_user(user_id: str, update: AdminUserUpdate, admin: dict =
     if data.get("role") and data["role"] not in ("admin", "driver"):
         raise HTTPException(status_code=400, detail="Invalid role")
     if data:
-        await db.users.update_one({"id": user_id}, {"$set": data})
+        op = {"$set": data}
+        if data.get("status") == "suspended":
+            op["$inc"] = {"token_version": 1}  # revoke live sessions immediately
+        await db.users.update_one({"id": user_id}, op)
     updated = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
     return {"user": updated}
 
@@ -2670,7 +2784,10 @@ async def marketplace_update_user(user_id: str, payload: MarketplaceUserUpdate, 
         raise HTTPException(status_code=400, detail="No fields to update")
     if "name" in updates:
         updates["full_name"] = updates["name"]
-    result = await db.users.update_one({"id": user_id}, {"$set": updates})
+    op = {"$set": updates}
+    if updates.get("status") == "suspended":
+        op["$inc"] = {"token_version": 1}  # revoke live sessions immediately
+    result = await db.users.update_one({"id": user_id}, op)
     if result.matched_count == 0:
         raise HTTPException(status_code=404, detail="User not found")
     user = await db.users.find_one({"id": user_id}, {"_id": 0, "password_hash": 0})
@@ -2770,6 +2887,9 @@ async def create_facility(payload: FacilityCreate, current_user: dict = Depends(
         "owner_user_id": current_user["id"],
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    # Facilities never approve themselves — admin review required
+    if current_user.get("role") != "admin":
+        doc["status"] = "pending"
     await db.facilities.insert_one(doc)
     doc.pop("_id", None)
     return doc
@@ -2860,16 +2980,44 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
     is_assigned = current_user["id"] in (job.get("accepted_by"), job.get("assigned_driver_id"))
     if not (is_staff or is_poster or is_assigned):
         raise HTTPException(status_code=403, detail="Not authorized")
+    if role == "driver":
+        raise HTTPException(status_code=403, detail="Drivers update jobs through the delivery flow — accept, pickup checklist, then delivered with evidence")
     raw_updates = {k: v for k, v in payload.model_dump().items() if v is not None}
-    if role == "driver" and set(raw_updates.keys()) - {"status"}:
-        raise HTTPException(status_code=403, detail="Drivers can only update job status")
     validate_enum(payload.status, JOB_STATUSES, "status")
     validate_enum(payload.item_category, ITEM_CATEGORIES, "item_category")
     validate_handling_flags(payload.handling_flags)
     updates = raw_updates
     if not updates:
         raise HTTPException(status_code=400, detail="No fields to update")
+    current_status = job.get("status")
     new_status = updates.get("status")
+
+    # ---- State machine: terminal jobs are immutable; custody-only statuses can't be set by hand ----
+    TERMINAL_STATUSES = ("delivered", "completed", "cancelled", "returned")
+    if current_status in TERMINAL_STATUSES:
+        raise HTTPException(status_code=403, detail="This job is finalized — its record can no longer be edited")
+    CUSTODY_ONLY_STATUSES = {"picked_up", "in_transit", "delivered", "completed", "returned"}
+    if new_status and new_status != current_status:
+        if new_status in CUSTODY_ONLY_STATUSES:
+            raise HTTPException(status_code=400, detail="This status is reached only through the chain-of-custody flow (pickup checklist / delivered with evidence)")
+        allowed_transitions = {
+            "open": {"offered", "cancelled"},
+            "offered": {"open", "accepted", "cancelled"},
+            "accepted": {"open", "cancelled"},
+            "in_progress": {"cancelled"},
+        }.get(current_status, set())
+        if new_status not in allowed_transitions:
+            raise HTTPException(status_code=400, detail=f"Cannot change status from '{current_status}' to '{new_status}'")
+        if role == "facility" and new_status != "cancelled":
+            raise HTTPException(status_code=403, detail="Facilities can only cancel their deliveries")
+
+    # ---- Money & address fields lock once a courier has accepted ----
+    LOCKED_AFTER_ACCEPT = {"payout_amount", "offered_price", "distance_km", "estimated_distance_km",
+                           "pickup_address", "dropoff_address", "delivery_address",
+                           "recipient_name", "recipient_phone", "pickup_city", "delivery_city"}
+    if current_status not in ("open", "offered") and (set(updates) & LOCKED_AFTER_ACCEPT) and role != "admin":
+        raise HTTPException(status_code=403, detail="Money and address fields are locked once a courier has accepted this job")
+
     target_driver = updates.get("assigned_driver_id") or job.get("assigned_driver_id") or job.get("accepted_by")
     if updates.get("assigned_driver_id") and not await is_driver_verified(updates["assigned_driver_id"]):
         raise HTTPException(status_code=400, detail="Cannot assign job: driver is not compliant (verification not approved, suspended, or insurance expired)")
@@ -2946,9 +3094,10 @@ async def delete_job(job_id: str, current_user: dict = Depends(get_current_user)
         allowed = job["facility_id"] in await facility_ids_owned_by(current_user["id"])
     if not allowed:
         raise HTTPException(status_code=403, detail="Not authorized")
+    # Financial/custody integrity: only never-accepted jobs can be removed; everything else is cancelled/archived
+    if job.get("status") != "open":
+        raise HTTPException(status_code=400, detail="Jobs with delivery history cannot be deleted — cancel it instead; the record is retained for billing and chain-of-custody")
     await db.jobs.delete_one({"id": job_id})
-    await db.ledger.delete_many({"job_id": job_id, "type": "commission"})
-    await db.earnings.delete_many({"job_id": job_id})
     await log_audit(current_user, "delete", "job", job_id)
     return {"status": "deleted", "job_id": job_id}
 
@@ -3003,6 +3152,11 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
             raise HTTPException(status_code=422, detail="recipient_name is required for delivery")
         if not payload.evidence_url:
             raise HTTPException(status_code=422, detail="Signature or ID evidence is required — items can never be left at the door")
+        # Evidence must belong to this job (no arbitrary URL strings)
+        _parts = [p for p in payload.evidence_url.split("/") if p]
+        _ev_id = _parts[-2] if _parts and _parts[-1] == "file" else (_parts[-1] if _parts else "")
+        if not await db.delivery_evidence.find_one({"id": _ev_id, "job_id": job_id}, {"_id": 1}):
+            raise HTTPException(status_code=422, detail="Evidence must be captured for this delivery before marking it delivered")
     elif et == "delivery_attempted":
         if status not in ("picked_up", "in_transit"):
             raise HTTPException(status_code=400, detail="No active delivery to abort")
@@ -3084,6 +3238,7 @@ async def upload_delivery_evidence(job_id: str, file: UploadFile = File(...), ki
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
     if not data:
         raise HTTPException(status_code=422, detail="Empty file")
+    verify_file_signature(data, content_type)
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "png"
     path = f"{STORAGE_APP_PREFIX}/delivery-evidence/{job_id}/{kind}-{uuid.uuid4()}.{ext}"
     try:
@@ -3108,15 +3263,7 @@ async def upload_delivery_evidence(job_id: str, file: UploadFile = File(...), ki
 @api_router.get("/delivery-evidence/{evidence_id}/file")
 async def serve_delivery_evidence(evidence_id: str, request: Request, auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     ev = await db.delivery_evidence.find_one({"id": evidence_id}, {"_id": 0})
@@ -3307,6 +3454,7 @@ async def upload_driver_document(
         raise HTTPException(status_code=413, detail="File too large (max 10 MB)")
     if not data:
         raise HTTPException(status_code=422, detail="Empty file")
+    verify_file_signature(data, content_type)
 
     rec = await ensure_driver_record(current_user["id"])
     ext = file.filename.rsplit(".", 1)[-1].lower() if "." in (file.filename or "") else "bin"
@@ -3364,15 +3512,7 @@ async def upload_driver_document(
 @api_router.get("/driver-documents/{doc_id}/file")
 async def serve_driver_document(doc_id: str, request: Request, auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     doc = await db.driver_documents.find_one({"id": doc_id, "is_deleted": False}, {"_id": 0})
@@ -3565,8 +3705,8 @@ async def create_facility_request(payload: FacilityRequestCreate, current_user: 
         facility = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0})
         if not facility:
             raise HTTPException(status_code=400, detail="Set up your facility profile before booking transport")
-    if facility.get("status") == "suspended":
-        raise HTTPException(status_code=403, detail="This facility is suspended and cannot book new transports. Contact the administrator.")
+    if facility.get("status") != "approved":
+        raise HTTPException(status_code=403, detail="Your facility must be approved by an administrator before booking transports. Please wait for review or contact support.")
     if not payload.consent_data_handling:
         raise HTTPException(status_code=422, detail="Recipient consent to the delivery and to personal-data handling is required before booking")
 
@@ -3721,15 +3861,7 @@ async def facility_billing(month: Optional[str] = None, current_user: dict = Dep
 @api_router.get("/facility/billing/export")
 async def facility_billing_export(request: Request, month: Optional[str] = None, format: str = "csv", auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")
@@ -3970,15 +4102,7 @@ async def admin_billing_driver_statements(month: Optional[str] = None, admin: di
 @api_router.get("/admin/billing/export")
 async def admin_billing_export(request: Request, month: Optional[str] = None, report: str = "revenue", auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     if current_user.get("role") != "admin":
@@ -4159,15 +4283,7 @@ async def compliance_credential_alerts(staff: dict = Depends(require_staff)):
 @api_router.get("/jobs/{job_id}/custody-record/pdf")
 async def custody_record_pdf(job_id: str, request: Request, auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     if current_user.get("role") not in ("admin", "dispatcher"):
@@ -4266,15 +4382,7 @@ async def custody_record_pdf(job_id: str, request: Request, auth: Optional[str] 
 async def compliance_breach_report(date_from: str, date_to: str, format: Optional[str] = None,
                                    request: Request = None, auth: Optional[str] = Query(None)):
     if auth:
-        try:
-            payload = jwt.decode(auth, JWT_SECRET, algorithms=[JWT_ALGORITHM])
-            current_user = await db.users.find_one({"id": payload["user_id"]}, {"_id": 0})
-            if not current_user:
-                raise HTTPException(status_code=401, detail="User not found")
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail="Token expired")
-        except jwt.InvalidTokenError:
-            raise HTTPException(status_code=401, detail="Invalid token")
+        current_user = await user_from_download_token(auth)
     else:
         current_user = await get_current_user(request)
     if current_user.get("role") != "admin":
@@ -4370,7 +4478,24 @@ async def arriving_soon(job_id: str, current_user: dict = Depends(get_current_us
 
 @api_router.post("/sms/twilio-webhook")
 async def twilio_inbound_webhook(request: Request):
+    # CASL compliance: only authentic Twilio requests may change opt-in state
+    auth_token = os.environ.get("TWILIO_AUTH_TOKEN")
+    if not auth_token:
+        raise HTTPException(status_code=403, detail="Webhook not enabled")
     form = await request.form()
+    signature = request.headers.get("X-Twilio-Signature", "")
+    proto = request.headers.get("x-forwarded-proto", request.url.scheme)
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host") or request.url.netloc
+    public_url = f"{proto}://{host}{request.url.path}"
+    try:
+        from twilio.request_validator import RequestValidator
+        validator = RequestValidator(auth_token)
+        if not validator.validate(public_url, dict(form), signature):
+            raise HTTPException(status_code=403, detail="Invalid signature")
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=403, detail="Signature validation unavailable")
     from_phone = normalize_phone(form.get("From", ""))
     body = (form.get("Body") or "").strip().upper()
     if from_phone:
@@ -4613,13 +4738,23 @@ async def startup_event():
         logger.info("Object storage initialized")
     except Exception as e:
         logger.error(f"Object storage init failed: {e}")
-    # Auto-promote admin if ADMIN_EMAIL user already exists
-    if ADMIN_EMAIL:
-        await db.users.update_one(
-            {"email": ADMIN_EMAIL},
-            {"$set": {"role": "admin"}}
-        )
-        logger.info(f"Admin auto-promote ensured for: {ADMIN_EMAIL}")
+    # Email hygiene: normalize to lowercase, then enforce uniqueness
+    try:
+        async for u in db.users.find({"$expr": {"$ne": ["$email", {"$toLower": "$email"}]}}, {"_id": 0, "id": 1, "email": 1}):
+            lower = u["email"].lower().strip()
+            if await db.users.find_one({"email": lower, "id": {"$ne": u["id"]}}, {"_id": 1}):
+                logger.warning(f"Email case-duplicate kept as-is (manual review needed): {u['email']}")
+                continue
+            await db.users.update_one({"id": u["id"]}, {"$set": {"email": lower}})
+        await db.users.create_index("email", unique=True)
+    except Exception as e:
+        logger.warning(f"Email unique index not created (resolve duplicates first): {e}")
+    # One commission entry per job, enforced at the DB level
+    try:
+        await db.ledger.create_index([("job_id", 1), ("type", 1)], unique=True,
+                                     partialFilterExpression={"type": "commission"})
+    except Exception as e:
+        logger.warning(f"Ledger commission unique index not created: {e}")
 
 @app.on_event("shutdown")
 async def shutdown_db_client():

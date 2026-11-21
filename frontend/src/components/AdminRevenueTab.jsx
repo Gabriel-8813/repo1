@@ -4,6 +4,7 @@ import { useAuth } from '../context/AuthContext';
 import { Button } from './ui/button';
 import { Card, CardContent } from './ui/card';
 import { Input } from './ui/input';
+import { openSecureUrl } from '../lib/downloadToken';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow
 } from './ui/table';
@@ -59,7 +60,7 @@ export const AdminRevenueTab = () => {
   useEffect(() => { load(); }, [load]);
 
   const exportCsv = (report) => {
-    window.open(`${API}/admin/billing/export?month=${month}&report=${report}&auth=${token}`, '_blank');
+    openSecureUrl(`${API}/admin/billing/export?month=${month}&report=${report}`);
   };
 
   const k = summary?.kpis;

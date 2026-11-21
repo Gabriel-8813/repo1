@@ -6,6 +6,7 @@ import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { getDownloadToken } from '../lib/downloadToken';
 import {
   Truck, LogOut, Wallet, Star, MapPin, Undo2, PackageCheck,
   Navigation2, CheckCircle2, ShieldAlert, AlertCircle, FileImage, ChevronRight
@@ -32,6 +33,14 @@ export default function EarningsPage() {
   const [data, setData] = useState(null);
   const [custodyJob, setCustodyJob] = useState(null);
   const [custodyEvents, setCustodyEvents] = useState(null);
+  const [dlToken, setDlToken] = useState(null);
+
+  useEffect(() => {
+    if (!token) return;
+    getDownloadToken().then(setDlToken).catch(() => {});
+    const iv = setInterval(() => getDownloadToken().then(setDlToken).catch(() => {}), 4 * 60 * 1000);
+    return () => clearInterval(iv);
+  }, [token]);
 
   const fetchEarnings = useCallback(async () => {
     try {
@@ -230,11 +239,11 @@ export default function EarningsPage() {
                         <p className="text-xs text-slate-600 mt-1">Received by <span className="font-medium">{ev.recipient_name}</span>{ev.recipient_relationship ? ` (${ev.recipient_relationship})` : ''}</p>
                       )}
                       {ev.notes && <p className="text-xs text-slate-500 italic mt-0.5">{ev.notes}</p>}
-                      {ev.evidence_url && (
+                      {ev.evidence_url && dlToken && (
                         <div className="mt-2">
                           <p className="text-[11px] text-slate-400 flex items-center gap-1 mb-1"><FileImage className="w-3 h-3" /> Proof of delivery</p>
                           <img
-                            src={`${process.env.REACT_APP_BACKEND_URL}${ev.evidence_url}?auth=${token}`}
+                            src={`${process.env.REACT_APP_BACKEND_URL}${ev.evidence_url}?auth=${dlToken}`}
                             alt="Proof of delivery evidence"
                             className="rounded-lg border border-slate-200 max-h-40 bg-white"
                             data-testid="custody-evidence-image"

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, useSearchParams, Link } from 'react-router-dom';
 import axios from 'axios';
 import { Button } from '../components/ui/button';
 import { Card, CardContent } from '../components/ui/card';
@@ -15,6 +15,7 @@ const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
 
 const RatePage = () => {
   const { jobId } = useParams();
+  const [searchParams] = useSearchParams();
   const [info, setInfo] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -50,7 +51,8 @@ const RatePage = () => {
       await axios.post(`${API}/reviews/${jobId}`, {
         rating,
         comment: comment || null,
-        reviewer_name: reviewerName || null
+        reviewer_name: reviewerName || null,
+        confirm_token: searchParams.get('t') || null
       });
       setDone(true);
     } catch (e) {
