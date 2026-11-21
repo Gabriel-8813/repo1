@@ -1,0 +1,44 @@
+{
+  "summary": "Tested the new Admin Revenue (billing/commission engine) feature end-to-end. Backend: 38/38 pytest assertions pass in new /app/backend/tests/test_admin_billing.py covering RBAC (dispatcher/driver/facility -> 403, unauth -> 401/403, export with non-admin token -> 403), month validation (422), KPI internal consistency (platform_revenue = commission + fees; by_facility/by_region gross == gross_delivery_value; trips match), invoice math (subtotal = sum item charges, HST = 13%, total, commission), driver-statement math (net = gross - commission - fees, fee_items sum), summary<->invoices<->statements cross-consistency, empty-month zero state, and 4 CSV exports (headers, content-disposition, row counts matched API). E2E math verified by creating a real facility1 job, driver1 accept -> pickup_confirmed -> delivered custody event: $100 job -> commission exactly $20.00 (20%), and with facility commission_rate_override=0.10 a $200 job -> commission $20.00 with commission_rate 0.10 reported per-job; override restored to null and test jobs deleted. Frontend: Revenue tab renders month input, all 5 KPI cards ($42.50 gross / $8.50 commission / $15.00 fees / $23.50 revenue), by-facility & by-region tables, invoices table (HST $5.53, total $48.03) and statements table (net $19.00); invoice drill-down shows line items + Subtotal/HST/Total; statement drill-down shows gross/commission(20%)/net + $15 cancellation fee line + net payable; changing month to 2019-01 reloads to 0/$0.00 with correct empty states; all 4 CSV buttons open export tabs; regression tabs (Users, Drivers, Facilities, Jobs, Ledger), facility portal Billing statement and driver /billing ledger page all still render with no console/page errors.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "/api/admin/billing/summary|invoices|driver-statements", "issue": "Month regex ^\\d{4}-\\d{2}$ accepts impossible months: month=2026-13 and 2026-00 return 200 with zeroed KPIs instead of 422."},
+      {"endpoint": "/api/admin/billing/export", "issue": "Unknown report value (e.g. report=bogus) silently falls back to the revenue summary CSV instead of 422; also the access token is passed as a ?auth= query param (leaks into browser history / proxy logs) — consider a short-lived one-time download token."},
+      {"endpoint": "_month_financials vs settle_job_completion", "issue": "Gross precedence differs: settlement computes commission from offered_price or payout_amount, while the report computes facility_charge from payout_amount or offered_price. If a job has both fields with different values, reported commission_rate (commission/gross) will be wrong/misleading."},
+      {"endpoint": "DELETE /api/jobs/{id}", "issue": "Deleting a delivered job does not cascade its commission ledger / earnings rows. DB currently holds 61 orphan commission ledger entries (from earlier test iterations) that no longer map to any job — these still inflate driver1's outstanding balance ($530.50 on /billing) while the new Revenue reports (job-joined) exclude them, so the two views disagree."},
+      {"endpoint": "/api/admin/billing/*", "issue": "Scalability: all delivered jobs are loaded (to_list(5000)) and month-filtered in Python on a string prefix instead of a Mongo range query on delivered_at; will degrade and silently truncate past 5000 completed jobs."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "AdminRevenueTab", "issue": "No loading/skeleton state — KPI grid and tables briefly render empty while 3 requests are in-flight (also on month change), and on failure only a toast fires with stale data left on screen (no inline error state).", "selector": "[data-testid=\"admin-revenue-tab\"]", "priority": "LOW"},
+      {"component": "AdminRevenueTab month picker", "issue": "Uses native <input type=\"month\"> browser picker (inconsistent with the app's shadcn styling); acceptable but noted for design consistency with the facility Billing tab which does the same.", "selector": "[data-testid=\"revenue-month-input\"]", "priority": "LOW"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "Admin -> Revenue", "issues": ["Layout, spacing, contrast and empty-state copy all look correct at 1920x1080; no contrast/overlay problems found."]}
+    ]
+  },
+  "test_report_links": ["/app/backend/tests/test_admin_billing.py", "/app/test_reports/pytest/iteration_18_billing.xml"],
+  "action_items": [
+    "Tighten month validation to reject 2026-13 / 2026-00 (validate the month component, not just the pattern).",
+    "Validate the export report param (whitelist revenue|invoices|driver_statements|jobs) and return 422 for unknown values; consider not putting the JWT in the URL.",
+    "Align gross precedence between settle_job_completion and _month_financials (pick one of payout_amount/offered_price consistently) so commission_rate is always exact.",
+    "Cascade-delete (or void) commission/earnings ledger rows when an admin deletes a delivered job, and clean up the 61 existing orphan commission entries that inflate driver outstanding balances.",
+    "Add loading/error states to AdminRevenueTab and move the month filter to a Mongo delivered_at range query."
+  ],
+  "critical_code_review_comments": [
+    "server.py ~3110: month filtering done in Python over all delivered jobs; use {'delivered_at': {'$gte': month+'-01', '$lt': next_month}} with an index.",
+    "admin_billing_export re-invokes the route handlers directly passing current_user in the place of the Depends() arg — works but is fragile; extract shared service functions instead.",
+    "server.py is 3399 lines — split billing/admin routers into modules."
+  ],
+  "updated_files": ["/app/backend/tests/test_admin_billing.py"],
+  "success_rate": {"backend": "100%", "frontend": "100%"},
+  "seed_data_creation": "Created 2 TEST completed jobs (facility1 -> driver1, $100 default rate and $200 with 0.10 override) to verify commission math; both jobs deleted, facility commission_rate_override restored to null, and their 4 orphan ledger + 4 earnings rows removed. Month 2026-08 baseline restored exactly (1 trip / $42.50 / $8.50 commission / $15.00 fees / $23.50 revenue).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md (admin gabrielosmanhamza@yahoo.com / Admin@123, facility1@test.com / Facility@123, driver1@test.com / Driver@123, dispatcher1@test.com / Dispatch@123)",
+  "context_for_next_testing_agent": "New regression suite: /app/backend/tests/test_admin_billing.py (38 tests, session fixtures auto-clean created jobs + restore facility override). Baseline for 2026-08 must stay 1 trip/$42.50/$8.50/$15.00/$23.50 — assert deltas if you add jobs. Delivery via API: POST /api/jobs/{id}/accept, then POST /api/jobs/{id}/custody-events with pickup_confirmed (checklist label_confirmed/item_count_confirmed/cooler_confirmed) then delivered (recipient_name + evidence_url required). item_category must be one of biological|lab_sample|medical_equipment|medical_supply|other|prescription. Admin regression endpoints: /api/admin/{users,driver-verifications,facilities,jobs,ledger,stats} (there is no /api/admin/drivers or /api/ledger). Remember: deleting jobs leaves orphan ledger rows — clean them after your own test jobs.",
+  "rca_of_the_issue": "No functional defect in the billing engine: commission is read from the ledger entry written at settlement (which honours facility commission_rate_override) with a 20% fallback, and all report aggregates reconcile. The residual issues are validation gaps (month/report params), a token-in-URL export pattern, gross-field precedence divergence between settlement and reporting, and missing ledger cascade on job deletion which makes driver outstanding balance ($530.50) disagree with the job-joined Revenue reports."
+}

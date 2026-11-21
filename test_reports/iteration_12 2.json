@@ -1,0 +1,56 @@
+{
+  "summary": "Tested the new driver 'Active Delivery' feature end-to-end. Backend: wrote 18 new pytest cases in /app/backend/tests/test_active_delivery.py covering the custody-event stage machine (pickup_confirmed checklist enforcement incl. cold_chain + temperature_controlled cooler rule and 400 messages listing missing items, status->picked_up + picked_up_at; in_transit_ping 400 before pickup, first ping flips picked_up->in_transit, repeat pings append; delivered 400 before pickup, 422 missing recipient_name, 422 'never be left at the door' without evidence, settlement math 42.50/8.50/34.00, earnings row, owed commission ledger entry, driver total_trips increment, no events accepted after delivered; delivery_attempted requires active delivery; returned requires prior attempt, sets status=returned and creates job_returned notifications for facility owner + dispatcher with PUT /notifications/{id}/read working and 404 cross-user), delivery-evidence upload RBAC (422 bad kind, 403 other driver, 403 facility, 201 assigned driver, byte-exact serve for driver/dispatcher/facility/admin, 403 unrelated driver, ?auth= token 200 / bad token 401, 404 unknown id), append-only PUT/DELETE 405, and regressions (legacy /complete from accepted and from in_transit; delivered job reviewable via /reviews/info + POST /reviews and tippable via /tips/checkout). Full backend suite: 156 passed / 0 failed (138 previous + 18 new), incl. test_commission_pivot.py and test_rbac_marketplace.py green. Frontend (mobile 390x844, driver1): full happy path on the cold-chain $42.50 job (accept -> Start Delivery -> Stage 1 full pickup address + Google Maps Navigate link + 3 checkboxes with cooler present, Confirm Pickup disabled until all 3 checked -> Stage 2 dropoff + Navigate + Arrived -> Stage 3 signature canvas drawn with mouse, recipient name, 'other than patient' reveals relationship and re-disables the button until filled -> Delivered summary showing net $34.00) with custody trail verified via API (pickup_confirmed, in_transit_ping, delivered w/ evidence_url + recipient_name/relationship). Exception path on the $58 prescription job (no cooler checkbox, ID tab labelled 'Gov. ID (required option)', setting id-photo-input + name enables Mark Delivered, Customer Unavailable -> Abort dialog -> Return stage with pickup address + Navigate back -> Confirm Return -> 'Item Returned'; job status=returned and both facility1 and dispatcher1 received an unread job_returned notification). Also verified 'Continue Delivery' label + resume-at-Stage-2 for a picked_up job and the automatic 60s ping interval (2 pings recorded in 72s on screen).",
+  "backend_issues": {
+    "critical": [],
+    "minor": []
+  },
+  "frontend_issues": {
+    "ui_bugs": [],
+    "integration_issues": [
+      {
+        "flow": "Stage 3 persistence",
+        "issue": "The 'arrived' flag is component-local state only. If the driver reloads /delivery/:jobId (or returns from Maps and the tab was evicted) while the job is picked_up/in_transit, the UI drops back to Stage 2 and the driver must tap 'Arrived at dropoff' again. Any typed recipient name / drawn signature is also lost. Consider persisting an 'arrived' marker (custody event or localStorage).",
+        "affected_selectors": ["[data-testid=\"arrived-btn\"]", "[data-testid=\"delivery-stage\"]"]
+      },
+      {
+        "flow": "In-transit GPS pings",
+        "issue": "The 60s ping POST failure is swallowed by an empty catch, so repeated failures (offline driver) leave no user-visible signal and no retry/backoff; custody trail would silently have gaps.",
+        "affected_selectors": ["[data-testid=\"transit-stage\"]"]
+      }
+    ],
+    "design_issues": [
+      {
+        "screen": "/delivery/:jobId (mobile 390x844)",
+        "issues": [
+          "Stage progress dots are purely decorative (no labels, no aria/data-testid) so the current stage is only conveyed by the small header badge.",
+          "Recipient name / relationship inputs rely on placeholders only — once filled there is no visible label (a11y: no <label>/aria-label on these Inputs).",
+          "GPS was denied in the sandbox and every custody event stored gps_lat/gps_lng = null with no UI hint that location capture failed — for a legal chain of custody a 'location unavailable' warning would be valuable."
+        ]
+      }
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_active_delivery.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Optional: persist the Stage-3 'arrived' state so a page reload does not send the driver back to Stage 2 (and consider preserving recipient name/signature).",
+    "Optional: surface in_transit_ping failures (toast/badge) instead of the silent catch, and warn when geolocation is denied since custody GPS ends up null.",
+    "Optional a11y: add aria-label/labels to recipient-name and relationship inputs and expose the stage in the progress indicator."
+  ],
+  "critical_code_review_comments": [
+    "settle_job_completion refactor is clean and shared by both /complete and the delivered custody event; commission/earnings/total_trips all verified identical between paths.",
+    "Stage machine correctly blocks every out-of-order transition tested (no event accepted after delivered/returned) and custody events remain append-only (PUT/PATCH/DELETE 405).",
+    "notify_job_return de-dupes targets via a set, so a facility owner who is also the poster gets one notification — verified.",
+    "server.py is now ~2700 lines; consider splitting into routers (jobs/custody, payments, admin, drivers) per the >700-line guideline.",
+    "Auth is bearer-JWT only: no httpOnly cookie login, no brute-force lockout counters in the codebase (grep for set_cookie/failed_login returns nothing). bcrypt hashes are generated with bcrypt.gensalt() ($2b$). Flagging only as informational — unchanged by this feature."
+  ],
+  "updated_files": ["/app/backend/tests/test_active_delivery.py"],
+  "success_rate": {"backend": "100% (156/156 pytest, incl. 18 new)", "frontend": "100% of feature flows passed"},
+  "seed_data_creation": "Consumed both seeded LifeLabs Queen West jobs (259d5e65… delivered, 20d3dddd… returned) and RE-SEEDED two equivalent open jobs via facility1: e2238fce-ed1b-4041-bf61-91bf52eecf9c ($42.50 lab_sample cold_chain+fragile+signature_required, temperature_controlled) and 4501864d-9389-46fa-9018-875e7dbc84fb ($58.00 prescription id_required+controlled_substance). Deleted all leftover TEST_QA jobs (incl. two stale $80 ones from earlier iterations). driver1's owed balance grew by commissions on the completed jobs (expected).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md — all four accounts valid (login returns access_token, not 'token')",
+  "context_for_next_testing_agent": "New suite /app/backend/tests/test_active_delivery.py is self-seeding (creates its own facility1 jobs, deletes them via admin in module teardown) — safe to re-run repeatedly; it does NOT touch the two demo open jobs. Login response key is 'access_token'. Driver ledger is GET /api/driver/balance (there is no /driver/ledger); driver total_trips is only visible via GET /api/drivers/{user_id}/record with an admin token. Geolocation is denied in the browser sandbox so all custody events store null GPS — flows still work. Frontend feature flows on /delivery/:jobId (mobile 390x844) were fully verified incl. signature drawing via mouse events and the 60s ping interval (needs a ~72s wait to observe the 2nd ping).",
+  "rca_of_the_issue": "No defects found in the feature. The only behavioural gap is by design-omission: ActiveDeliveryPage keeps 'arrived' (and signature/recipient inputs) in React state only, so a reload during Stage 3 rewinds the UI to Stage 2; the backend stage machine is unaffected because no custody event is written on 'Arrived'."
+}

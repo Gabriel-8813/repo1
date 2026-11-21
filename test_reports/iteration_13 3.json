@@ -1,0 +1,51 @@
+{
+  "summary": "Iteration 13 — Facility Portal feature (POST /api/facility/requests, masking/reveal, driver queue) tested end-to-end. New pytest suite tests/test_facility_portal.py (10 tests) all pass: create defaults pickup to facility address (455 Queen St W), status=offered, distance_km numeric, payout math exact (max($25,$1.50/km)*1.5 urgent +$15 cold_chain), no _id leak, 422 on bad item_category/handling flag, 403 driver, 401 unauth, 400 for facility-role user without facility profile. Driver masking verified: /jobs/available shows pickup_area/dropoff_area/item_count/requested_pickup_time with pickup_address/delivery_address/dropoff_address/recipient_name/recipient_phone = null; accept reveals full addresses + recipient name/phone (and persists on GET /jobs/{id}); decline removes job from that driver's queue while status stays offered / assigned_driver_id null. Regression suites test_driver_available_jobs.py + test_rbac_marketplace.py green (42 passed). Full backend suite: 167/169 passed (1 stale assertion fixed by me, 1 informational auth-hardening check). Frontend desktop 1280x800: landing 'Book Transport' -> /login -> /facility portal, all form testids present, red non-clinical warning visible, pickup placeholder = facility address, submit produced toast 'Request created — 1.7 km, driver payout $37.50. Now offered to drivers.' and card appeared in Your Requests with 'offered' badge and matching payout; form resets. Facility-setup card path verified for a user with no facility profile (profile created -> book form appears with new address as default). Driver mobile 390x844 /jobs Available: new offered card renders with masked areas, flags, payout & 20% commission line; Accept moved it to My Jobs Active with full addresses revealed. All test data (2 UI jobs, throwaway user + TEST_QA Clinic facility) cleaned up; board back to the 5 demo jobs; LifeLabs Queen West untouched.",
+  "backend_issues": {
+    "critical": [],
+    "minor": [
+      {"endpoint": "POST /api/auth/login", "issue": "No brute-force lockout: 6 consecutive wrong passwords all return 401 and the correct password still logs in immediately (no 423/429). Informational security gap, not part of this feature."},
+      {"endpoint": "CORS middleware", "issue": "CORS_ORIGINS='*' combined with allow_credentials=True is invalid per the CORS spec (browsers reject wildcard with credentials). Harmless today because auth is Bearer-token, but should be explicit origins."}
+    ]
+  },
+  "frontend_issues": {
+    "ui_bugs": [
+      {"component": "JobsPage available card", "issue": "Unassigned offered jobs (assigned_driver_id=null) still show the blue 'Offered to you' badge, implying a personal/direct offer when it is an open-pool offer. Misleading for drivers.", "selector": "[data-testid^=\"offered-badge-\"]", "priority": "MEDIUM"},
+      {"component": "JobsPage available card flags", "issue": "Urgency badge duplicates the 'urgent' handling flag chip — card shows 'Urgent' twice for urgent jobs.", "selector": "[data-testid^=\"job-flags-\"]", "priority": "LOW"},
+      {"component": "JobsPage active job (post-accept)", "issue": "API reveals recipient_name/recipient_phone after accept, but the driver Active card only renders pickup/dropoff addresses — recipient name/phone are never shown, so the driver has no contact for handoff.", "selector": "[data-testid^=\"active-job-card-\"]", "priority": "MEDIUM"}
+    ],
+    "integration_issues": [],
+    "design_issues": [
+      {"screen": "/facility Book Transport", "issues": ["Requested pickup time uses the native browser datetime-local picker (mm/dd/yyyy placeholder) instead of a shadcn date/time control — inconsistent with the rest of the design system", "Item category and facility-type use native <select> rather than the shadcn Select used elsewhere", "Facility setup card page leaves a large empty area below the card (content top-aligned, no vertical centering)"]}
+    ]
+  },
+  "test_report_links": [
+    "/app/backend/tests/test_facility_portal.py",
+    "/app/backend/tests/test_auth_hardening.py",
+    "/app/test_reports/pytest/pytest_results.xml"
+  ],
+  "action_items": [
+    "Only show 'Offered to you' badge when assigned_driver_id === current driver; use a neutral 'Open offer' label otherwise",
+    "Display recipient name + phone on the driver Active job card after accept (data already returned by API)",
+    "De-duplicate the urgency badge vs 'urgent' handling flag chip on available job cards",
+    "Optional: replace native datetime-local / <select> in the facility form with shadcn components for design consistency"
+  ],
+  "critical_code_review_comments": [
+    "server.py is 2918 lines — split into routers (auth, jobs, facility, admin, payments) before it grows further",
+    "create_facility_request writes the job with status 'created' then immediately issues a second update to 'offered' plus two audit rows; a single insert with status='offered' (or a transaction) would avoid a window where the job is invisible/inconsistent",
+    "Nominatim geocoding is called inline in the request path with no cache; repeated identical facility→dropoff pairs will hit the rate limit and silently fall back to the 10km billing default (payout inaccuracy). Consider caching geocodes per address in Mongo",
+    "distance_estimated is returned only on create, not stored on the job, so nobody can later tell whether a payout used a real distance or the 10km fallback"
+  ],
+  "updated_files": [
+    "/app/backend/tests/test_facility_portal.py",
+    "/app/backend/tests/test_auth_hardening.py",
+    "/app/backend/tests/test_permits_and_fix.py",
+    "/app/tests/cleanup_qa_jobs.py"
+  ],
+  "success_rate": {"backend": "99% (167/169; 1 informational lockout check fails by design)", "frontend": "100% of tested flows"},
+  "seed_data_creation": "None persisted. Temporarily created 2 facility requests via UI, 1 throwaway facility-role user (TEST_setupfac@test.com) and facility 'TEST_QA Clinic' — all deleted via admin API (see /app/tests/cleanup_qa_jobs.py).",
+  "should_call_test_agent_after_fix": false,
+  "should_main_agent_self_test": true,
+  "test_credentials": "/app/memory/test_credentials.md is complete and accurate (facility1/driver1/admin/dispatcher all logged in successfully). Suggest updating the note that /facility is a 'placeholder shell' — it is now the full Facility Portal.",
+  "context_for_next_testing_agent": "Facility Portal backend + UI is functionally correct; only cosmetic/UX items remain ('Offered to you' badge on open offers, missing recipient contact on driver active card, duplicated urgent badge, native pickers). test_permits_and_fix.py had a stale wording assertion on the cancel-open-job 400 detail — I relaxed it. Nominatim is rate-limited: my facility-portal suite sleeps ~1.2s between creates; if distance_km comes back as exactly 10.0 with distance_estimated=false, that is the designed fallback, not a bug. Always clean created jobs via admin DELETE /api/jobs/{id}; do not delete facility 'LifeLabs Queen West'.",
+  "rca_of_the_issue": "No functional defect found in the new feature. The single genuine test failure (test_permits_and_fix cancel detail) was a test-side stale string assertion, not product behaviour (endpoint correctly returns 400)."
+}
