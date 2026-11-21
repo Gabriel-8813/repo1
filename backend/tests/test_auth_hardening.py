@@ -1,6 +1,5 @@
 """Auth hardening checks: bcrypt hash format, brute-force lockout, admin seed."""
 import os
-import pytest
 import requests
 from dotenv import dotenv_values
 from pymongo import MongoClient

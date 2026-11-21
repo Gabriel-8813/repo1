@@ -155,10 +155,14 @@ class TestAcceptedByLifecycle:
     def test_staff_set_status_accepted_sets_accepted_by(self, sess, created_jobs):
         job = make_job(sess, created_jobs, title="TEST_IT15 staff accept sets accepted_by")
         driver_id = sess["driver"][1]["id"]
+        # New state machine: staff cannot force 'accepted' — they offer, the driver accepts.
         r = requests.put(f"{API}/jobs/{job['id']}",
                          json={"assigned_driver_id": driver_id, "status": "accepted"},
                          headers=hdr(sess, "dispatcher"), timeout=30)
-        assert r.status_code == 200, r.text[:300]
+        assert r.status_code == 400, r.text[:300]
+        requests.put(f"{API}/jobs/{job['id']}", json={"assigned_driver_id": driver_id, "status": "offered"},
+                     headers=hdr(sess, "dispatcher"), timeout=30).raise_for_status()
+        requests.post(f"{API}/jobs/{job['id']}/accept", headers=hdr(sess, "driver"), timeout=30).raise_for_status()
         persisted = get_job_admin(sess, job["id"])
         assert persisted["status"] == "accepted"
         assert persisted.get("accepted_by") == driver_id

@@ -161,7 +161,7 @@ export default function DispatchHomePage() {
                 {selected.driver_name && <p><span className="text-slate-400">Driver:</span> {selected.driver_name}</p>}
               </div>
 
-              {!['delivered', 'completed', 'cancelled', 'returned'].includes(selected.status) && (
+              {!['delivered', 'completed', 'cancelled', 'returned', 'picked_up', 'in_transit'].includes(selected.status) && (
                 <div className="bg-slate-50 rounded-xl p-3 space-y-2">
                   <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">{selected.driver_name ? 'Reassign' : 'Assign'} to approved driver</p>
                   <div className="flex gap-2">

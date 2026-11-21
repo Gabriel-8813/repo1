@@ -17,6 +17,7 @@ import pytest
 import requests
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import dotenv_values
+from custody_helpers import complete_via_custody
 
 _FE = dotenv_values("/app/frontend/.env")
 _BE = dotenv_values("/app/backend/.env")
@@ -74,10 +75,16 @@ def _make_completed_job(api_client, admin_token, driver_token, label="REV"):
     r = api_client.post(f"{API}/jobs/{jid}/accept",
                         headers={"Authorization": f"Bearer {driver_token}"})
     assert r.status_code == 200
-    r = api_client.post(f"{API}/jobs/{jid}/complete",
-                        headers={"Authorization": f"Bearer {driver_token}"})
-    assert r.status_code == 200
+    r = complete_via_custody(API, jid, {"Authorization": f"Bearer {driver_token}"})
+    assert r.status_code == 201, r.text
     return jid
+
+
+def _confirm_token(jid):
+    from pymongo import MongoClient
+    db = MongoClient(MONGO_URL)[DB_NAME]
+    j = db.jobs.find_one({"id": jid}, {"confirm_token": 1})
+    return j.get("confirm_token") if j else None
 
 
 @pytest.fixture(scope="module")
@@ -164,7 +171,8 @@ class TestSubmitReview:
     def test_submit_success_and_shape(self, api_client, created_jobs, driver_id):
         jid = created_jobs[0]
         r = api_client.post(f"{API}/reviews/{jid}", json={
-            "rating": 5, "comment": "Excellent driver!", "reviewer_name": "TEST_Customer_A"
+            "rating": 5, "comment": "Excellent driver!", "reviewer_name": "TEST_Customer_A",
+            "confirm_token": _confirm_token(jid)
         })
         assert r.status_code == 200, r.text
         d = r.json()
@@ -188,7 +196,7 @@ class TestSubmitReview:
     def test_duplicate_review_returns_400(self, api_client, created_jobs):
         # 2nd submission on same job should 400
         jid = created_jobs[0]
-        r = api_client.post(f"{API}/reviews/{jid}", json={"rating": 3})
+        r = api_client.post(f"{API}/reviews/{jid}", json={"rating": 3, "confirm_token": _confirm_token(jid)})
         assert r.status_code == 400
         assert "already been reviewed" in r.text.lower()
 
@@ -198,7 +206,7 @@ class TestPublicDriverReviews:
     def test_list_reviews_and_summary(self, api_client, created_jobs, driver_id):
         # Submit review on 2nd job (3 stars)
         jid2 = created_jobs[1]
-        r = api_client.post(f"{API}/reviews/{jid2}", json={"rating": 3, "comment": "ok"})
+        r = api_client.post(f"{API}/reviews/{jid2}", json={"rating": 3, "comment": "ok", "confirm_token": _confirm_token(jid2)})
         assert r.status_code == 200
 
         r = api_client.get(f"{API}/drivers/{driver_id}/reviews")
@@ -256,7 +264,7 @@ class TestAdminReviews:
     ):
         # Submit a 3rd review (1 star) on job 3
         jid3 = created_jobs[2]
-        r = api_client.post(f"{API}/reviews/{jid3}", json={"rating": 1, "comment": "TEST_hide_target"})
+        r = api_client.post(f"{API}/reviews/{jid3}", json={"rating": 1, "comment": "TEST_hide_target", "confirm_token": _confirm_token(jid3)})
         assert r.status_code == 200
         review_id = r.json()["review"]["id"]
 

@@ -2853,11 +2853,12 @@ def user_public(u: dict) -> dict:
 async def admin_create_user(payload: MarketplaceUserCreate, admin: dict = Depends(require_admin)):
     validate_enum(payload.role, USER_ROLES, "role")
     validate_enum(payload.status, USER_STATUSES, "status")
-    if await db.users.find_one({"email": payload.email}):
+    email = payload.email.lower().strip()  # login lowercases; store normalized so admin-created users can sign in
+    if await db.users.find_one({"email": email}):
         raise HTTPException(status_code=400, detail="Email already registered")
     doc = {
         "id": str(uuid.uuid4()),
-        "email": payload.email,
+        "email": email,
         "password_hash": hash_password(payload.password),
         "full_name": payload.name,
         "name": payload.name,
@@ -3115,9 +3116,11 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
         allowed_transitions = {
             "open": {"offered", "cancelled"},
             "offered": {"open", "accepted", "cancelled"},
-            "accepted": {"open", "cancelled"},
+            "accepted": {"open", "offered", "cancelled"},
             "in_progress": {"cancelled"},
         }.get(current_status, set())
+        if current_status == "accepted" and new_status == "offered" and role not in ("admin", "dispatcher"):
+            raise HTTPException(status_code=403, detail="Only dispatch staff can reassign an accepted job")
         if new_status not in allowed_transitions:
             raise HTTPException(status_code=400, detail=f"Cannot change status from '{current_status}' to '{new_status}'")
         if role == "facility" and new_status != "cancelled":
@@ -3154,6 +3157,8 @@ async def update_job(job_id: str, payload: JobUpdate, current_user: dict = Depen
     now = datetime.now(timezone.utc).isoformat()
     if new_status == "offered":
         updates["offered_at"] = now
+        if current_status == "accepted":
+            updates.setdefault("accepted_by", None)  # reassign: release previous driver's claim
     elif new_status == "cancelled":
         updates["cancelled_at"] = now
     if new_status == "accepted" and not job.get("accepted_at"):

@@ -192,10 +192,24 @@ class TestCaslNoConsent:
 
 
 # ---- Opt-out (STOP webhook + admin management) ----
+TWILIO_TOKEN = dotenv_values("/app/backend/.env").get("TWILIO_AUTH_TOKEN")
+
+
+def _twilio_post(url, data):
+    """Send a signed Twilio webhook request; skip if webhook is not enabled in this env."""
+    if not TWILIO_TOKEN:
+        r = requests.post(url, data=data, timeout=30)
+        assert r.status_code == 403, f"unsigned webhook must be rejected, got {r.status_code}"
+        pytest.skip("TWILIO_AUTH_TOKEN not configured — webhook disabled (403 verified)")
+    from twilio.request_validator import RequestValidator
+    sig = RequestValidator(TWILIO_TOKEN).compute_signature(url, data)
+    return requests.post(url, data=data, headers={"X-Twilio-Signature": sig}, timeout=30)
+
+
 class TestOptOut:
     def test_stop_webhook_and_blocked_send(self, tokens, created_job_ids):
-        r = requests.post(f"{API}/sms/twilio-webhook",
-                          data={"From": RECIPIENT_PHONE, "Body": "STOP"}, timeout=30)
+        r = _twilio_post(f"{API}/sms/twilio-webhook",
+                         {"From": RECIPIENT_PHONE, "Body": "STOP"})
         assert r.status_code == 200
         assert "<Response>" in r.text and "xml" in r.headers.get("content-type", "")
         _, meta = outbox_for(tokens, "none")
@@ -211,8 +225,8 @@ class TestOptOut:
         assert len(msgs) == 1 and msgs[0]["status"] == "blocked_optout", msgs
 
     def test_start_removes_optout(self, tokens):
-        r = requests.post(f"{API}/sms/twilio-webhook",
-                          data={"From": RECIPIENT_PHONE, "Body": "START"}, timeout=30)
+        r = _twilio_post(f"{API}/sms/twilio-webhook",
+                         {"From": RECIPIENT_PHONE, "Body": "START"})
         assert r.status_code == 200
         _, meta = outbox_for(tokens, "none")
         assert not any(o["phone"] == RECIPIENT_PHONE for o in meta["optouts"])

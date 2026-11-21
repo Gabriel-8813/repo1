@@ -324,10 +324,35 @@ Build an app for medical transportation that people can register and pay a month
   - SEC-003 (LOW, accepted risk): ADMIN_EMAIL auto-promote kept intentionally (owner convenience); risk mitigated by SEC-001 fix
 - Deployment readiness: removed .env block from .gitignore; retention purge loop no longer auto-starts (admin-triggered only). Health check PASS. App deployed; custom domain: https://meditranscanada.com
 - Capacitor config updated: server.url now points to https://meditranscanada.com so native iOS/Android builds load the live production site
+
+## Launch-Readiness Hardening (Nov 2026 — complete, full suite green)
+Phase 1 security/data integrity (B1-B10) verified in iteration_24 (12/12):
+- Admin-only POST /jobs/{id}/complete (requires reason); drivers complete via custody flow only
+- Token type/purpose checks (reset tokens can't authenticate); token-version session revocation; suspended/deleted users denied
+- Removed ADMIN_EMAIL auto-promotion; admin seeding via backend/create_admin.py CLI
+- Email normalization + duplicate blocking + password policy; facilities start pending (admin approval before booking)
+- Money/address locks post-accept; restricted deletion; evidence binding + magic-byte upload checks; reviews need confirm_token
+- Download tokens (short-lived) replace session tokens in ?auth=; Safari-safe synchronous window.open in lib/downloadToken.js
+- Stripe origin allow-list; Twilio webhook signature validation (403 when TWILIO_AUTH_TOKEN unset)
+
+Money flow (standard marketplace, iteration_25 HIGH items fixed Nov 21):
+- Facility pays statement via Stripe checkout; drivers get net payouts via Connect transfers; platform keeps commission
+- Atomic settle claim on payment_transactions.settled (webhook/poll race-safe); facility_payments unique by session_id (upsert)
+- Per-payout atomic pending→processing claim + Stripe idempotency key (no double transfers)
+- Per-job statement scoping: items carry paid flag; due_subtotal/due_hst/due_total; pay charges only unpaid jobs (job_ids stored on tx); repay allowed for remainder; legacy driver-owed commissions waived when facility pays
+- CVOR marked optional via idempotent startup migration (standard cars exempt)
+- Frontend: Pay button uses due_total; "Remaining due" row; poll extended to 30 attempts with processing toast
+
+Product bugs fixed during suite reconciliation (Nov 21):
+- POST /api/users saved email as-typed while login lowercases → admin-created mixed-case users could never log in (now lowercased + case-insensitive dup check)
+- Dispatcher Reassign: accepted→offered now allowed for admin/dispatcher (clears accepted_by); UI hides Reassign after pickup
+- Account deletion links added (driver Billing footer, Facility portal footer); privacy policy wording aligned
+
+Test suite fully reconciled to new security model: 380 passed, 6 env-legit skips, 0 failures (tests/custody_helpers.py shared helpers; test_auth_hardening cleans its own lockouts; Twilio webhook tests sign with RequestValidator or skip when token absent).
+
 ## Next Tasks
-1. Rate-limit "Forgot password" emails (max 3 per 10 min) — abuse protection (P1)
-2. "Pay Statement" button in Facility Billing tab via Stripe (P1)
-3. Refactor server.py (~3,100 lines) into routers/models/services (P1)
-4. Brute-force lockout on /api/auth/login (P1, flagged by testing iterations 13-15)
-5. Stripe live keys + production RESEND_API_KEY when going live (P2)
-6. Push notifications for urgent jobs via Capacitor (P2)
+1. Refactor server.py (~4,800 lines) into routers/models/services (P1)
+2. Stripe live keys + production RESEND_API_KEY + TWILIO_AUTH_TOKEN when going live (P1)
+3. Native store builds: bundled assets (no remote server.url), deep-link payment returns, push notifications, physical-device testing (P1)
+4. Email verification at signup (launch review item, not yet implemented) (P2)
+5. Store listing privacy/data-safety materials (P2)

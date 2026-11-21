@@ -12,6 +12,7 @@ import os
 import uuid
 import pytest
 import requests
+from custody_helpers import complete_via_custody
 from datetime import datetime, timezone, timedelta
 from motor.motor_asyncio import AsyncIOMotorClient
 import asyncio
@@ -148,10 +149,12 @@ class TestCommissionFlow:
         r = requests.post(f"{API}/jobs/{job_id}/accept", headers=h, timeout=10)
         assert r.status_code == 200, f"Accept without sub should work, got {r.status_code}: {r.text}"
 
-        # complete
-        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=h, timeout=10)
-        assert r.status_code == 200, r.text
-        data = r.json()
+        # complete via chain-of-custody (driver POST /complete is now admin-only)
+        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=h, json={"reason": "x"}, timeout=10)
+        assert r.status_code == 403, r.text
+        r = complete_via_custody(API, job_id, h)
+        assert r.status_code == 201, r.text
+        data = r.json()["settlement"]
         assert data["gross_earnings"] == 200.0
         assert data["commission_charged"] == 40.0   # 20%
         assert data["net_earnings"] == 160.0
@@ -163,7 +166,7 @@ class TestCommissionFlow:
         matching = [e for e in bal["entries"] if e.get("job_id") == job_id and e.get("type") == "commission"]
         assert matching, f"No commission ledger entry for job {job_id}"
         assert matching[0]["amount"] == 40.0
-        assert matching[0]["status"] == "owed"
+        assert matching[0]["status"] == "accrued"  # marketplace model: facility pays platform
 
     def test_cancel_within_grace_no_charge(self, driver_token, admin_token):
         h = {"Authorization": f"Bearer {driver_token}"}

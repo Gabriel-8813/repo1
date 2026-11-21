@@ -245,8 +245,11 @@ class TestDeliveryEvidence:
         g = requests.get(ev_url, headers=hdr(tokens, "driver2"), timeout=30)
         assert g.status_code == 403, f"unrelated driver got {g.status_code}"
 
-        # ?auth= query token works, bad token 401
+        # session bearer in ?auth= is rejected (401); short-lived download token works
         g = requests.get(ev_url, params={"auth": tokens["driver"][0]}, timeout=30)
+        assert g.status_code == 401, g.status_code
+        dt = requests.get(f"{API}/auth/download-token", headers=hdr(tokens, "driver"), timeout=30).json()["token"]
+        g = requests.get(ev_url, params={"auth": dt}, timeout=30)
         assert g.status_code == 200, g.status_code
         g = requests.get(ev_url, params={"auth": "not-a-jwt"}, timeout=30)
         assert g.status_code == 401, g.status_code
@@ -315,13 +318,13 @@ class TestDeliveredStage:
         earnings = requests.get(f"{API}/earnings", headers=hdr(tokens, "driver"), timeout=30).json()["earnings"]
         assert any(e["job_id"] == job_id and e["amount"] == price for e in earnings), "earnings row missing"
 
-        # ledger commission owed
+        # marketplace model: commission ledger entry is 'accrued' (facility pays platform), not 'owed'
         led = requests.get(f"{API}/driver/balance", headers=hdr(tokens, "driver"), timeout=30)
         assert led.status_code == 200, led.text[:200]
         entries = led.json().get("entries") or []
         match = [e for e in entries if e.get("job_id") == job_id and e.get("type") == "commission"]
         assert match, "commission ledger entry missing"
-        assert match[0]["status"] == "owed"
+        assert match[0]["status"] == "accrued"
         assert match[0]["amount"] == s["commission_charged"]
 
         # total_trips incremented
@@ -342,8 +345,15 @@ class TestDeliveredStage:
         # delivered job can be reviewed + tipped
         info = requests.get(f"{API}/reviews/info/{job_id}", timeout=30)
         assert info.status_code == 200, f"review info on delivered job: {info.status_code} {info.text[:200]}"
+        # reviews require the recipient confirm token from the delivery SMS link
+        from pymongo import MongoClient
+        _benv = dotenv_values("/app/backend/.env")
+        ctok = MongoClient(_benv["MONGO_URL"])[_benv["DB_NAME"]].jobs.find_one({"id": job_id})["confirm_token"]
+        bad = requests.post(f"{API}/reviews/{job_id}", json={"rating": 5, "reviewer_name": "TEST_ Customer"}, timeout=30)
+        assert bad.status_code == 403, bad.status_code
         rev = requests.post(f"{API}/reviews/{job_id}", json={"rating": 5, "comment": "TEST_ great",
-                                                             "reviewer_name": "TEST_ Customer"}, timeout=30)
+                                                             "reviewer_name": "TEST_ Customer",
+                                                             "confirm_token": ctok}, timeout=30)
         assert rev.status_code in (200, 201), f"{rev.status_code} {rev.text[:300]}"
         assert rev.json()["review"]["rating"] == 5
 
@@ -422,13 +432,18 @@ class TestReturnFlow:
         assert r.status_code == 400, f"{r.status_code} {r.text[:200]}"
 
 
-# ---------- Legacy complete regression ----------
+# ---------- Legacy complete: now ADMIN-ONLY with a documented reason ----------
 class TestLegacyComplete:
     def test_complete_from_accepted_settles(self, tokens, facility_id, created_jobs):
         price = 30.0
         job_id = make_job(tokens, facility_id, created_jobs, price=price)
         accept(tokens, job_id)
-        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "driver"), timeout=60)
+        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "driver"), json={"reason": "x"}, timeout=60)
+        assert r.status_code == 403, f"driver must not complete: {r.status_code}"
+        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "admin"), json={}, timeout=60)
+        assert r.status_code == 422, f"reason required: {r.status_code}"
+        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "admin"),
+                          json={"reason": "TEST_ manual settlement"}, timeout=60)
         assert r.status_code == 200, r.text[:300]
         body = r.json()
         assert body["job"]["status"] == "completed"
@@ -443,7 +458,8 @@ class TestLegacyComplete:
         custody(tokens, job_id, event_type="pickup_confirmed",
                 checklist={"label_confirmed": True, "item_count_confirmed": True})
         custody(tokens, job_id, event_type="in_transit_ping")
-        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "driver"), timeout=60)
+        r = requests.post(f"{API}/jobs/{job_id}/complete", headers=hdr(tokens, "admin"),
+                          json={"reason": "TEST_ manual settlement"}, timeout=60)
         assert r.status_code == 200, r.text[:300]
         assert r.json()["job"]["status"] == "completed"
 

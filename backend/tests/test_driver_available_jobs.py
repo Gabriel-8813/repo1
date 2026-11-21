@@ -4,12 +4,12 @@ Covers: GET /api/jobs/available masking + eligibility, POST /jobs/{id}/accept (s
 POST /jobs/{id}/decline, offered-to-me flow, cancel/complete from 'accepted'.
 """
 import os
-import re
 import uuid
 
 import pytest
 import requests
 from dotenv import dotenv_values
+from custody_helpers import complete_via_custody
 
 frontend_env = dotenv_values("/app/frontend/.env")
 base_url = os.environ.get("REACT_APP_BACKEND_URL") or frontend_env.get("REACT_APP_BACKEND_URL")
@@ -202,13 +202,16 @@ class TestAccept:
     def test_complete_from_accepted(self, tokens, facility_id):
         jid = make_job(tokens, facility_id, payout_amount=58.0)
         assert requests.post(f"{API}/jobs/{jid}/accept", headers=hdr(tokens["driver1"]), timeout=30).status_code == 200
-        r = requests.post(f"{API}/jobs/{jid}/complete", headers=hdr(tokens["driver1"]), timeout=30)
-        assert r.status_code == 200, r.text
+        # driver completes via chain-of-custody (POST /complete is admin-only now)
+        assert requests.post(f"{API}/jobs/{jid}/complete", headers=hdr(tokens["driver1"]), json={"reason": "x"},
+                             timeout=30).status_code == 403
+        r = complete_via_custody(API, jid, hdr(tokens["driver1"]))
+        assert r.status_code == 201, r.text
         body = r.json()
         assert "commission" in str(body).lower() or "driver_earnings" in body or "platform_fee" in body, body
         adm = requests.get(f"{API}/jobs/{jid}", headers=hdr(tokens["admin"]), timeout=30).json()
         adm = adm.get("job", adm)
-        assert adm["status"] == "completed"
+        assert adm["status"] == "delivered"
         assert adm["completed_at"] and adm["delivered_at"]
 
 
@@ -274,7 +277,9 @@ class TestLegacyStatus:
     def test_legacy_in_progress_can_complete(self, tokens, driver1_id, facility_id):
         jid = make_job(tokens, facility_id)
         assert requests.post(f"{API}/jobs/{jid}/accept", headers=hdr(tokens["driver1"]), timeout=30).status_code == 200
-        up = requests.put(f"{API}/jobs/{jid}", headers=hdr(tokens["admin"]), json={"status": "in_progress"}, timeout=30)
-        assert up.status_code == 200, up.text
-        r = requests.post(f"{API}/jobs/{jid}/complete", headers=hdr(tokens["driver1"]), timeout=30)
-        assert r.status_code == 200, r.text
+        # 'in_progress' is a legacy status that can no longer be set via API — simulate legacy data in DB
+        from pymongo import MongoClient
+        be = dotenv_values("/app/backend/.env")
+        MongoClient(be["MONGO_URL"])[be["DB_NAME"]].jobs.update_one({"id": jid}, {"$set": {"status": "in_progress"}})
+        r = complete_via_custody(API, jid, hdr(tokens["driver1"]))
+        assert r.status_code == 201, r.text

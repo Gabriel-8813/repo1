@@ -8,6 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 import requests
 from dotenv import dotenv_values
+from custody_helpers import upload_evidence, download_token
 
 fe = dotenv_values("/app/frontend/.env")
 BASE = (os.environ.get("REACT_APP_BACKEND_URL") or fe.get("REACT_APP_BACKEND_URL")).rstrip("/")
@@ -157,7 +158,7 @@ def deliver_facility_request(tokens, created_jobs, phone="416-555-0000"):
     rd = requests.post(f"{API}/jobs/{jid}/custody-events", headers=dh, json={
         "event_type": "delivered", "recipient_name": "TEST_Recipient",
         "recipient_relationship": "self",
-        "evidence_url": "https://example.com/sig.png", "gps_lat": 43.6, "gps_lng": -79.6}, timeout=30)
+        "evidence_url": upload_evidence(API, jid, {"Authorization": dh["Authorization"]}), "gps_lat": 43.6, "gps_lng": -79.6}, timeout=30)
     assert rd.status_code in (200, 201), rd.text[:300]
     return jid
 
@@ -285,14 +286,16 @@ class TestMissingPod:
 
     def test_delivered_without_event_appears(self, tokens, created_jobs, driver_user_id):
         jid = create_job(tokens, created_jobs, "TEST_compliance_nopod")
+        # New model: staff can't hand-set delivered; a job settled via the admin-only manual
+        # complete (no custody 'delivered' event) is exactly what this report must surface.
         dh = hdr(tokens["dispatcher"])
         a = hdr(tokens["admin"])
-        for st in ("accepted", "picked_up", "in_transit", "delivered"):
-            body = {"status": st}
-            if st == "accepted":
-                body["assigned_driver_id"] = driver_user_id
-            r = requests.put(f"{API}/jobs/{jid}", headers=dh, json=body, timeout=30)
-            assert r.status_code == 200, f"{st} -> {r.status_code} {r.text[:200]}"
+        r = requests.put(f"{API}/jobs/{jid}", headers=dh, json={"status": "offered", "assigned_driver_id": driver_user_id}, timeout=30)
+        assert r.status_code == 200, f"offer -> {r.status_code} {r.text[:200]}"
+        r = requests.post(f"{API}/jobs/{jid}/accept", headers=hdr(tokens["driver"]), timeout=30)
+        assert r.status_code == 200, f"accept -> {r.status_code} {r.text[:200]}"
+        r = requests.post(f"{API}/jobs/{jid}/complete", headers=a, json={"reason": "TEST_ missing POD scenario"}, timeout=30)
+        assert r.status_code == 200, f"admin complete -> {r.status_code} {r.text[:200]}"
         rows = requests.get(f"{API}/admin/compliance/missing-pod", headers=a, timeout=30).json()["jobs"]
         row = next((x for x in rows if x["job_id"] == jid), None)
         assert row, "delivered job without POD not listed"
@@ -313,7 +316,7 @@ class TestMissingPod:
         assert rp.status_code in (200, 201), rp.text[:200]
         rd = requests.post(f"{API}/jobs/{jid}/custody-events", headers=dh, json={
             "event_type": "delivered", "recipient_name": "TEST_Recipient",
-            "evidence_url": "https://example.com/sig.png", "gps_lat": 43.6, "gps_lng": -79.6}, timeout=30)
+            "evidence_url": upload_evidence(API, jid, {"Authorization": dh["Authorization"]}), "gps_lat": 43.6, "gps_lng": -79.6}, timeout=30)
         assert rd.status_code in (200, 201), rd.text[:200]
         rows = requests.get(f"{API}/admin/compliance/missing-pod", headers=hdr(tokens["admin"]), timeout=30).json()["jobs"]
         assert all(x["job_id"] != jid for x in rows), "job with full POD wrongly flagged"
@@ -457,7 +460,7 @@ class TestCustodyPdf:
     def test_pdf_for_admin_and_dispatcher(self, tokens, created_jobs):
         jid = create_job(tokens, created_jobs, "TEST_compliance_pdf")
         for role in ("admin", "dispatcher"):
-            r = requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": tokens[role]}, timeout=60)
+            r = requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": download_token(API, hdr(tokens[role]))}, timeout=60)
             assert r.status_code == 200, f"{role} -> {r.status_code} {r.text[:200]}"
             assert r.headers["content-type"].startswith("application/pdf"), r.headers["content-type"]
             assert "attachment" in r.headers.get("content-disposition", "")
@@ -473,11 +476,15 @@ class TestCustodyPdf:
     def test_pdf_forbidden_for_driver_facility(self, tokens, created_jobs):
         jid = created_jobs[-1]
         for role in ("driver", "facility"):
-            r = requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": tokens[role]}, timeout=30)
+            r = requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": download_token(API, hdr(tokens[role]))}, timeout=30)
             assert r.status_code == 403, f"{role} -> {r.status_code}"
 
+    def test_pdf_session_token_in_query_rejected(self, tokens, created_jobs):
+        r = requests.get(f"{API}/jobs/{created_jobs[-1]}/custody-record/pdf", params={"auth": tokens["admin"]}, timeout=30)
+        assert r.status_code == 401, r.status_code
+
     def test_pdf_bad_token_and_bogus_job(self, tokens):
-        r = requests.get(f"{API}/jobs/does-not-exist/custody-record/pdf", params={"auth": tokens["admin"]}, timeout=30)
+        r = requests.get(f"{API}/jobs/does-not-exist/custody-record/pdf", params={"auth": download_token(API, hdr(tokens["admin"]))}, timeout=30)
         assert r.status_code == 404, r.status_code
         r = requests.get(f"{API}/jobs/does-not-exist/custody-record/pdf", params={"auth": "garbage"}, timeout=30)
         assert r.status_code == 401, r.status_code
@@ -485,7 +492,7 @@ class TestCustodyPdf:
     def test_export_audited(self, tokens, created_jobs):
         jid = created_jobs[-1]
         a = hdr(tokens["admin"])
-        requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": tokens["admin"]}, timeout=60)
+        requests.get(f"{API}/jobs/{jid}/custody-record/pdf", params={"auth": download_token(API, hdr(tokens["admin"]))}, timeout=60)
         logs = requests.get(f"{API}/audit-logs", params={"entity": "job_custody_record", "entity_id": jid,
                                                          "action": "export"}, headers=a, timeout=30).json()["logs"]
         assert logs, "custody PDF export not audited"
@@ -528,7 +535,7 @@ class TestBreachReport:
 
     def test_csv_export_and_audit(self, tokens):
         a = hdr(tokens["admin"])
-        params = dict(self.RANGE, format="csv", auth=tokens["admin"])
+        params = dict(self.RANGE, format="csv", auth=download_token(API, hdr(tokens["admin"])))
         r = requests.get(f"{API}/admin/compliance/breach-report", params=params, timeout=60)
         assert r.status_code == 200, r.text[:200]
         assert r.headers["content-type"].startswith("text/csv"), r.headers["content-type"]

@@ -9,6 +9,7 @@ import uuid
 import pytest
 import requests
 from dotenv import dotenv_values
+from custody_helpers import complete_via_custody, pickup
 
 _env = dotenv_values("/app/frontend/.env")
 BASE_URL = (os.environ.get("REACT_APP_BACKEND_URL") or _env.get("REACT_APP_BACKEND_URL")).rstrip("/")
@@ -215,10 +216,10 @@ class TestDriverVerification:
             ar = requests.post(f"{API}/jobs/{jid}/accept", headers=_hdr(drv_tok))
             assert ar.status_code == 200, ar.text
             assert ar.json()["job"]["status"] == "accepted"
-            # complete → commission ledger
-            comp = requests.post(f"{API}/jobs/{jid}/complete", headers=_hdr(drv_tok))
-            assert comp.status_code == 200, comp.text
-            assert comp.json()["commission_charged"] > 0
+            # complete via custody flow → commission ledger
+            comp = complete_via_custody(API, jid, _hdr(drv_tok))
+            assert comp.status_code == 201, comp.text
+            assert comp.json()["settlement"]["commission_charged"] > 0
         finally:
             requests.delete(f"{API}/jobs/{jid}", headers=_hdr(admin_tok))
 
@@ -287,9 +288,11 @@ class TestJobUpdateRBAC:
             # accept as driver so they are assigned
             ar = requests.post(f"{API}/jobs/{jid}/accept", headers=_hdr(drv_tok))
             assert ar.status_code == 200
-            # driver PUT status-only should be ok
+            # driver cannot hand-set custody statuses — picked_up goes through the custody flow
             ok = requests.put(f"{API}/jobs/{jid}", json={"status": "picked_up"}, headers=_hdr(drv_tok))
-            assert ok.status_code == 200, ok.text
+            assert ok.status_code in (400, 403), ok.text
+            pk = pickup(API, jid, _hdr(drv_tok))
+            assert pk.status_code == 201, pk.text
             # driver PUT with other field => 403
             bad = requests.put(f"{API}/jobs/{jid}", json={"payout_amount": 999}, headers=_hdr(drv_tok))
             assert bad.status_code == 403, bad.text

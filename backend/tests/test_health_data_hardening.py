@@ -3,7 +3,6 @@ privacy-policy gate, audit immutability, data residency."""
 import io
 import json
 import os
-import re
 import uuid
 from datetime import datetime, timezone
 
@@ -309,7 +308,7 @@ class TestPrivacyGate:
             assert lg.status_code == 200
             assert lg.json()["user"]["privacy_policy"]["version"] == "1.0"
         finally:
-            mongo.users.delete_one({"email": email})
+            mongo.users.delete_one({"email": email.lower()})
 
     def test_accept_privacy_for_existing_user(self, mongo):
         email = f"TEST_priv_{uuid.uuid4().hex[:8]}@test.com"
@@ -320,7 +319,7 @@ class TestPrivacyGate:
             assert r.status_code == 200
             tok = r.json()["access_token"]
             uid = r.json()["user"]["id"]
-            mongo.users.update_one({"email": email}, {"$unset": {"privacy_policy": ""}})
+            mongo.users.update_one({"email": email.lower()}, {"$unset": {"privacy_policy": ""}})
             me = requests.get(f"{API}/auth/me", headers=hdr(tok), timeout=30)
             assert me.json().get("privacy_policy") is None
 
@@ -332,7 +331,7 @@ class TestPrivacyGate:
             audit = mongo.audit_logs.find_one({"actor_id": uid, "action": "accept", "entity": "privacy_policy"})
             assert audit, "no audit entry written for privacy acceptance"
         finally:
-            mongo.users.delete_one({"email": email})
+            mongo.users.delete_one({"email": email.lower()})
 
     def test_accept_privacy_requires_auth(self):
         r = requests.post(f"{API}/auth/accept-privacy", timeout=30)
@@ -432,7 +431,7 @@ class TestAuditIntegrity:
             assert reg.status_code == 200
             requests.post(f"{API}/auth/accept-privacy", headers=hdr(reg.json()["access_token"]), timeout=30)
         finally:
-            mongo.users.delete_one({"email": email})
+            mongo.users.delete_one({"email": email.lower()})
         after_doc = mongo.audit_logs.find_one({"seq": {"$exists": True}}, sort=[("seq", -1)])
         assert after_doc["seq"] > before, "audit seq did not increment"
         d = requests.get(f"{API}/admin/compliance/audit-integrity", headers=hdr(tokens["admin"]), timeout=120).json()

@@ -1,12 +1,11 @@
 """Driver onboarding: documents upload, file serving, staff review endpoints, audit trail."""
-import io
 import os
-import time
 import uuid
 
 import pytest
 import requests
 from dotenv import dotenv_values
+from custody_helpers import download_token
 
 frontend_env = dotenv_values("/app/frontend/.env")
 base_url = os.environ.get("REACT_APP_BACKEND_URL") or frontend_env.get("REACT_APP_BACKEND_URL")
@@ -112,7 +111,8 @@ class TestOnboardingState:
         assert d["all_required_submitted"] is False
         assert len(d["checklist"]) == 7
         req = [c for c in d["checklist"] if c["required"]]
-        assert len(req) == 6
+        assert len(req) == 5  # CVOR is optional for car/van medical couriers (startup migration)
+        assert any(c["doc_type"] == "cvor" and not c["required"] for c in d["checklist"])
         assert all(c["status"] == "missing" for c in d["checklist"])
         assert any(c["doc_type"] == "cold_chain_cert" and not c["required"] for c in d["checklist"])
 
@@ -181,8 +181,11 @@ class TestLifecycle:
         # owner via header
         r = requests.get(f"{API}/driver-documents/{doc_id}/file", headers=hdr(fresh_driver["token"]), timeout=60)
         assert r.status_code == 200 and r.content == PNG
-        # staff via ?auth= query (used by admin UI)
+        # session bearer in ?auth= is rejected; staff uses a short-lived download token (admin UI)
         r = requests.get(f"{API}/driver-documents/{doc_id}/file", params={"auth": admin_token}, timeout=60)
+        assert r.status_code == 401
+        r = requests.get(f"{API}/driver-documents/{doc_id}/file",
+                         params={"auth": download_token(API, hdr(admin_token))}, timeout=60)
         assert r.status_code == 200 and r.content == PNG
         # bad token
         r = requests.get(f"{API}/driver-documents/{doc_id}/file", params={"auth": "not.a.token"}, timeout=30)
@@ -242,7 +245,7 @@ class TestLifecycle:
         drivers = r.json()["drivers"]
         mine = [d for d in drivers if d["user_id"] == fresh_driver["user_id"]]
         assert mine, "fresh driver missing from verification list"
-        assert mine[0]["email"] == fresh_driver["email"]
+        assert mine[0]["email"] == fresh_driver["email"].lower()  # emails normalized to lowercase
         assert len(mine[0]["checklist"]) == 7
         assert mine[0]["vehicle_plate"] == "TESTQA1"
 

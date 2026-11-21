@@ -15,6 +15,7 @@ import pytest
 import requests
 from motor.motor_asyncio import AsyncIOMotorClient
 from dotenv import dotenv_values
+from custody_helpers import complete_via_custody
 
 _FE = dotenv_values("/app/frontend/.env")
 _BE = dotenv_values("/app/backend/.env")
@@ -87,11 +88,8 @@ def completed_job(api_client, admin_token, driver_token):
     )
     assert r.status_code == 200, r.text
 
-    r = api_client.post(
-        f"{API}/jobs/{job_id}/complete",
-        headers={"Authorization": f"Bearer {driver_token}"},
-    )
-    assert r.status_code == 200, r.text
+    r = complete_via_custody(API, job_id, {"Authorization": f"Bearer {driver_token}"})
+    assert r.status_code == 201, r.text
 
     yield job_id
 

@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 import requests
+from custody_helpers import pickup, deliver
 from dotenv import dotenv_values
 
 frontend_env = dotenv_values("/app/frontend/.env")
@@ -327,18 +328,18 @@ class TestActiveDeliveryException:
         dh = hdr(tokens, "driver")
         a = requests.post(f"{API}/jobs/{job['id']}/accept", headers=dh, timeout=60)
         assert a.status_code == 200, f"accept failed: {a.status_code} {a.text[:300]}"
-        p = requests.put(f"{API}/jobs/{job['id']}", json={"status": "picked_up"}, headers=dh, timeout=60)
-        assert p.status_code == 200, f"picked_up failed: {p.status_code} {p.text[:300]}"
+        # drivers advance only via custody flow (PUT status is staff-only now)
+        p = pickup(API, job["id"], dh)
+        assert p.status_code == 201, f"picked_up failed: {p.status_code} {p.text[:300]}"
         try:
+            # verification suspension must NOT strand an in-flight delivery
             assert set_status(tokens, did, "suspended").status_code == 200
-            t = requests.put(f"{API}/jobs/{job['id']}", json={"status": "in_transit"}, headers=dh, timeout=60)
-            assert t.status_code == 200, f"in_transit blocked for suspended driver: {t.status_code} {t.text[:300]}"
             ce = requests.post(f"{API}/jobs/{job['id']}/custody-events",
                                json={"event_type": "in_transit_ping", "notes": "TEST_QA custody"},
                                headers=dh, timeout=60)
             assert ce.status_code in (200, 201), f"custody event blocked: {ce.status_code} {ce.text[:300]}"
-            d = requests.put(f"{API}/jobs/{job['id']}", json={"status": "delivered"}, headers=dh, timeout=60)
-            assert d.status_code == 200, f"delivered blocked: {d.status_code} {d.text[:300]}"
+            d = deliver(API, job["id"], dh)
+            assert d.status_code == 201, f"delivered blocked: {d.status_code} {d.text[:300]}"
             g = requests.get(f"{API}/jobs/{job['id']}", headers=hdr(tokens, "admin"), timeout=60).json()
             assert g["status"] == "delivered"
         finally:

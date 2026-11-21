@@ -264,6 +264,7 @@ export default function FacilityHomePage() {
             </CardContent>
           </Card>
         ) : (
+          <>
           <Tabs defaultValue="book">
             <TabsList className="mb-6 h-11">
               <TabsTrigger value="book" className="h-9 px-6" data-testid="tab-book">Book & Track</TabsTrigger>
@@ -583,12 +584,12 @@ export default function FacilityHomePage() {
               </div>
             </TabsContent>
           </Tabs>
-
           <p className="text-center mt-8">
             <a href="/delete-account" className="text-xs text-slate-400 hover:text-red-600 underline" data-testid="delete-account-link">
               Delete my account
             </a>
           </p>
+          </>
         )}
       </main>
 

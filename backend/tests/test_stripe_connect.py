@@ -11,13 +11,12 @@ Covers:
 Test data prefixed TEST_CONN_*. Stripe Express accounts created are deleted in teardown.
 """
 import os
-import time
-import uuid
 import pytest
 import requests
 import stripe
 from pymongo import MongoClient
 from dotenv import load_dotenv
+from custody_helpers import complete_via_custody
 from pathlib import Path
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
@@ -224,9 +223,9 @@ class TestTipConnectRouting:
         # Driver accepts
         r = requests.post(f"{BASE_URL}/api/jobs/{job_id}/accept", headers=_h(driver_token))
         assert r.status_code in (200, 201), r.text
-        # Driver completes
-        r = requests.post(f"{BASE_URL}/api/jobs/{job_id}/complete", headers=_h(driver_token))
-        assert r.status_code in (200, 201), r.text
+        # Driver completes via custody flow
+        r = complete_via_custody(f"{BASE_URL}/api", job_id, _h(driver_token))
+        assert r.status_code == 201, r.text
 
         yield job_id
 
