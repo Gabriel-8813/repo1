@@ -21,6 +21,8 @@ const EVENT_META = {
   delivery_attempted: { icon: ShieldAlert, label: 'Delivery attempted', cls: 'text-amber-600 bg-amber-100' },
   delivered: { icon: CheckCircle2, label: 'Delivered', cls: 'text-emerald-700 bg-emerald-100' },
   returned: { icon: Undo2, label: 'Returned to facility', cls: 'text-amber-700 bg-amber-100' },
+  seal_verified: { icon: CheckCircle2, label: 'Seal verified intact', cls: 'text-emerald-600 bg-emerald-100' },
+  seal_exception: { icon: ShieldAlert, label: 'Seal exception', cls: 'text-red-600 bg-red-100' },
   exception: { icon: AlertCircle, label: 'Exception', cls: 'text-red-600 bg-red-100' }
 };
 

@@ -18,7 +18,7 @@ const COLUMNS = [
 ];
 const STALE_MIN = { created: 30, open: 30, offered: 30, accepted: 20, in_progress: 20, picked_up: 60, in_transit: 60 };
 const FLAG_ICONS = { cold_chain: Snowflake, urgent: Zap, controlled_substance: Lock, signature_required: PenLine, id_required: CreditCard, fragile: Package };
-const EVENT_LABELS = { pickup_confirmed: 'Pickup confirmed', in_transit_ping: 'Transit ping', delivery_attempted: 'Delivery attempted', delivered: 'Delivered', returned: 'Returned', exception: 'Exception' };
+const EVENT_LABELS = { pickup_confirmed: 'Pickup confirmed', in_transit_ping: 'Transit ping', delivery_attempted: 'Delivery attempted', delivered: 'Delivered', returned: 'Returned', seal_verified: 'Seal verified intact', seal_exception: 'Seal exception', exception: 'Exception' };
 
 const minsIn = (iso) => iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000)) : 0;
 const fmtMins = (m) => m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${m % 60}m`;

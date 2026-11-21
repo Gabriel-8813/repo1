@@ -460,7 +460,7 @@ const LandingPage = () => {
             <div>
               <h4 className="font-semibold mb-4">Contact</h4>
               <ul className="space-y-2 text-slate-400 text-sm">
-                <li>support@meditrans.ca</li>
+                <li>support@meditranscanada.com</li>
                 <li>1-800-MEDI-ONT</li>
               </ul>
             </div>

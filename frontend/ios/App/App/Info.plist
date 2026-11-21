@@ -45,5 +45,11 @@
 	</array>
 	<key>UIViewControllerBasedStatusBarAppearance</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>MediTrans uses the camera to capture proof-of-delivery signatures, recipient ID photos and compliance documents.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>MediTrans lets you choose an existing photo when uploading compliance documents or proof of delivery.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>MediTrans records your location at each chain-of-custody step (pickup, transit, delivery) to provide a verifiable delivery trail.</string>
 </dict>
 </plist>

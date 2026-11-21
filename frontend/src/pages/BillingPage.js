@@ -21,6 +21,7 @@ const BillingPage = () => {
   const [fees, setFees] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [connect, setConnect] = useState(null);
+  const [payouts, setPayouts] = useState({ pending_total: 0, paid_total: 0, payouts: [] });
   const [connectingStripe, setConnectingStripe] = useState(false);
   const [loading, setLoading] = useState(true);
   const [paying, setPaying] = useState(false);
@@ -35,16 +36,18 @@ const BillingPage = () => {
   const fetchData = async () => {
     try {
       const headers = { Authorization: `Bearer ${token}` };
-      const [b, f, t, c] = await Promise.all([
+      const [b, f, t, c, p] = await Promise.all([
         axios.get(`${API}/driver/balance`, { headers }),
         axios.get(`${API}/fees/agreement`),
         axios.get(`${API}/payments/history`, { headers }),
-        axios.get(`${API}/driver/connect/status`, { headers })
+        axios.get(`${API}/driver/connect/status`, { headers }),
+        axios.get(`${API}/driver/payouts`, { headers }).catch(() => ({ data: { pending_total: 0, paid_total: 0, payouts: [] } }))
       ]);
       setBalance(b.data);
       setFees(f.data.agreement);
       setTransactions(t.data.transactions);
       setConnect(c.data);
+      setPayouts(p.data);
     } catch (e) {
       console.error(e);
     } finally {
@@ -277,8 +280,32 @@ const BillingPage = () => {
           </CardContent>
         </Card>
 
-        {/* Current Balance */}
-        <Card className={`mb-8 border-2 ${balance.owed > 0 ? 'border-amber-300 bg-amber-50' : 'border-emerald-200 bg-emerald-50'}`}>
+        {/* Driver payouts (marketplace model: facility pays, you get your net automatically) */}
+        <Card className="mb-8 border-2 border-blue-200 bg-blue-50/50" data-testid="payouts-card">
+          <CardContent className="p-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <h2 className="font-archivo font-bold text-xl text-slate-900">Your Payouts</h2>
+                <p className="text-slate-600 text-sm">
+                  Facilities pay MediTrans for each delivery — your net payout (after the platform fee) is sent
+                  automatically to your bank via Stripe. You never owe a balance on new trips.
+                </p>
+                {!connect?.payouts_enabled && payouts.pending_total > 0 && (
+                  <p className="text-xs text-amber-700 mt-2 font-medium">Finish Stripe onboarding below to receive these payouts.</p>
+                )}
+              </div>
+              <div className="text-right">
+                <p className="font-archivo font-black text-3xl text-blue-700" data-testid="payouts-pending-amount">${payouts.pending_total.toFixed(2)}</p>
+                <p className="text-xs text-slate-500">pending payout</p>
+                <p className="text-sm font-semibold text-emerald-700 mt-2" data-testid="payouts-paid-amount">${payouts.paid_total.toFixed(2)} paid out</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Legacy outstanding balance (older trips only) */}
+        {balance.owed > 0 && (
+        <Card className="mb-8 border-2 border-amber-300 bg-amber-50">
           <CardContent className="p-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-4">
@@ -318,6 +345,7 @@ const BillingPage = () => {
             </div>
           </CardContent>
         </Card>
+        )}
 
         {/* Commission Summary */}
         <div className="grid md:grid-cols-3 gap-6 mb-8">

@@ -29,12 +29,12 @@ export default function PrivacyPolicyPage() {
           <p>Facilities must confirm the recipient's consent to the delivery and to the handling of their personal data before booking transport. SMS delivery updates are sent only with explicit consent, every message includes "Reply STOP to opt out", and STOP requests are honored immediately and permanently.</p>
         </Section>
         <Section icon={Trash2} title="Retention & deletion">
-          <p>Recipient personal information (name, phone, signature evidence) is automatically redacted after the configured retention period (default 365 days) while non-identifying delivery statistics are preserved for billing and compliance. Retention length is administrator-configurable and every purge is recorded in the audit log.</p>
+          <p>Recipient personal information (name, phone, signature evidence) is redacted after the configured retention period (default 365 days) through administrator-run purges, while non-identifying delivery statistics are preserved for billing and compliance. Purges are initiated by a MediTrans administrator from the Compliance dashboard on a regular schedule rather than running automatically; the retention length is administrator-configurable and every purge is recorded in the audit log.</p>
         </Section>
         <Section icon={MapPin} title="Data residency">
-          <p>MediTrans is configured for Canadian data residency (ca-central). Production infrastructure — database, object storage and compute — is provisioned in Canadian regions so personal information remains in Canada.</p>
+          <p>Sensitive recipient fields are encrypted at rest and access is role-restricted and audit-logged. Some service providers that MediTrans relies on may process data outside Canada: payment processing (Stripe), file storage (Emergent object storage), transactional email (Resend), SMS notifications (Twilio) and address geocoding (OpenStreetMap Nominatim). We share only the minimum data each provider needs to perform its function. By using MediTrans you consent to this processing; details are available from our privacy contact below.</p>
         </Section>
-        <p className="text-xs text-slate-400 mt-6">Questions or data-access requests: contact your facility administrator or the MediTrans platform administrator.</p>
+        <p className="text-xs text-slate-400 mt-6">MediTrans Canada · Privacy contact: support@meditranscanada.com — use this address for data access, correction, deletion requests or privacy complaints. Account deletion can also be requested from your profile in the app or at /delete-account.</p>
       </div>
     </div>
   );

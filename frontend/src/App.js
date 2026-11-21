@@ -27,6 +27,19 @@ import OnboardingPage from "./pages/OnboardingPage";
 import ActiveDeliveryPage from "./pages/ActiveDeliveryPage";
 import EarningsPage from "./pages/EarningsPage";
 import VerifySealPage from "./pages/VerifySealPage";
+import DeleteAccountPage from "./pages/DeleteAccountPage";
+
+const isNativeApp = typeof window !== "undefined" && !!window.Capacitor?.isNativePlatform?.();
+
+const DesktopOnlyNotice = () => (
+  <div className="min-h-screen flex items-center justify-center bg-slate-50 px-8 text-center" data-testid="desktop-only-notice">
+    <div>
+      <h1 className="font-archivo font-bold text-xl text-slate-900 mb-2">Available on desktop web</h1>
+      <p className="text-sm text-slate-600">The admin and dispatch consoles are designed for larger screens.
+        Please sign in at meditranscanada.com on a desktop browser.</p>
+    </div>
+  </div>
+);
 
 // Protected Route Component (kept for generic authed pages)
 // eslint-disable-next-line no-unused-vars
@@ -136,6 +149,7 @@ function AppRoutes() {
       <Route path="/terms" element={<TermsPage />} />
       <Route path="/verify" element={<VerifySealPage />} />
       <Route path="/verify/:code" element={<VerifySealPage />} />
+      <Route path="/delete-account" element={<DeleteAccountPage />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage />} />
       <Route path="/reset-password" element={<ResetPasswordPage />} />
       <Route 
@@ -222,19 +236,19 @@ function AppRoutes() {
       />
       <Route 
         path="/dispatch" 
-        element={
+        element={isNativeApp ? <DesktopOnlyNotice /> : (
           <RoleRoute roles={['dispatcher', 'admin']}>
             <DispatchHomePage />
           </RoleRoute>
-        } 
+        )} 
       />
       <Route 
         path="/admin" 
-        element={
+        element={isNativeApp ? <DesktopOnlyNotice /> : (
           <AdminRoute>
             <AdminDashboardPage />
           </AdminRoute>
-        } 
+        )} 
       />
 
       {/* Catch all - redirect to landing */}

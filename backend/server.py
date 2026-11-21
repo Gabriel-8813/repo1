@@ -86,10 +86,10 @@ ONTARIO_PERMITS = [
     {
         "id": "cvor",
         "name": "Commercial Vehicle Operator's Registration (CVOR)",
-        "description": "Required for operating commercial motor vehicles in Ontario",
+        "description": "Only required for trucks over 4,500 kg registered gross weight, buses and tow trucks — standard cars, SUVs and minivans are exempt",
         "issuing_authority": "Ontario Ministry of Transportation",
         "url": "https://www.ontario.ca/page/commercial-vehicle-operators-registration-cvor",
-        "required": True
+        "required": False
     },
     {
         "id": "tdg",
@@ -511,7 +511,7 @@ async def get_current_user(request: Request):
             raise HTTPException(status_code=401, detail="User not found")
         if int(payload.get("tv", 0)) != int(user.get("token_version", 0)):
             raise HTTPException(status_code=401, detail="Session expired — please sign in again")
-        if user.get("status") == "suspended":
+        if user.get("status") in ("suspended", "deleted"):
             raise HTTPException(status_code=403, detail="Account suspended — contact the administrator")
         return user
     except jwt.ExpiredSignatureError:
@@ -560,7 +560,7 @@ DRIVER_JOB_FIELDS = {
     "delivered_at", "completed_at", "accepted_by", "assigned_driver_id", "facility_id",
     "item_count", "requested_pickup_time", "recipient_name", "recipient_phone",
     "care_handoff", "storm_priority", "seal_code", "route_bundle", "bundle_bonus",
-    "seal_pickup_verified", "seal_delivery_verified", "confirm_token"
+    "seal_pickup_verified", "seal_delivery_verified"
 }
 
 REVEALED_JOB_STATUSES = {"accepted", "in_progress", "picked_up", "in_transit", "delivered", "completed", "returned"}
@@ -884,7 +884,7 @@ async def cascade_delete_driver_data(user_id: str):
 DRIVER_DOC_TYPES = {
     "drivers_licence": {"label": "Driver's Licence", "required": True},
     "vehicle_registration": {"label": "Vehicle Registration + Plate", "required": True},
-    "cvor": {"label": "CVOR Status", "required": True},
+    "cvor": {"label": "CVOR Status (only vehicles over 4,500 kg RGW, buses, tow trucks)", "required": False},
     "tdg_certificate": {"label": "TDG Training Certificate", "required": True},
     "vulnerable_sector_check": {"label": "Vulnerable Sector Check", "required": True},
     "commercial_insurance": {"label": "Commercial Insurance (min $2M liability)", "required": True, "needs_expiry": True},
@@ -1034,7 +1034,7 @@ async def login(credentials: UserLogin, request: Request):
         await record_failed_login(ip_identifier)
         await record_failed_login(acct_identifier)
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    if user.get("status") == "suspended":
+    if user.get("status") in ("suspended", "deleted"):
         raise HTTPException(status_code=403, detail="Account suspended — contact the administrator")
     await db.login_attempts.delete_many({"identifier": {"$in": [ip_identifier, acct_identifier]}})
     
@@ -1185,6 +1185,38 @@ async def reset_password(payload: PasswordResetConfirm):
     )
     return {"status": "ok", "message": "Password reset successfully"}
 
+class AccountDeleteRequest(BaseModel):
+    password: str
+
+@api_router.post("/auth/delete-account")
+async def delete_account(payload: AccountDeleteRequest, current_user: dict = Depends(get_current_user)):
+    """In-app account deletion (Apple 5.1.1(v) / Google Play requirement).
+    Personal data is anonymized; chain-of-custody and audit records are retained
+    for legal/billing compliance in de-identified form."""
+    if not verify_password(payload.password, current_user["password_hash"]):
+        raise HTTPException(status_code=400, detail="Password is incorrect")
+    if current_user.get("role") == "admin":
+        raise HTTPException(status_code=400, detail="Admin accounts are removed by another administrator")
+    active = await db.jobs.count_documents({
+        "assigned_driver_id": current_user["id"],
+        "status": {"$in": ["accepted", "in_progress", "picked_up", "in_transit"]}})
+    if active:
+        raise HTTPException(status_code=400, detail="Finish or cancel your active deliveries before deleting your account")
+    uid = current_user["id"]
+    now = datetime.now(timezone.utc).isoformat()
+    await db.users.update_one({"id": uid}, {"$set": {
+        "email": f"deleted-{uid[:8]}@deleted.meditrans",
+        "full_name": "Deleted User",
+        "phone": None,
+        "password_hash": hash_password(uuid.uuid4().hex),
+        "status": "deleted",
+        "deleted_at": now,
+        "driver_profile": None
+    }, "$inc": {"token_version": 1}})
+    await db.notifications.delete_many({"user_id": uid})
+    await log_audit(current_user, "delete", "account", uid, details={"self_service": True})
+    return {"status": "deleted", "message": "Your account has been deleted. Delivery custody and audit records are retained in de-identified form as required by law."}
+
 @api_router.get("/auth/download-token")
 async def issue_download_token(current_user: dict = Depends(get_current_user)):
     """Short-lived token used only for file/export links, so session JWTs never appear in URLs."""
@@ -1313,6 +1345,29 @@ async def create_balance_checkout(checkout_req: CheckoutRequest, request: Reques
     
     return {"checkout_url": session.url, "session_id": session.session_id, "amount": owed_total}
 
+async def _transfer_pending_payouts(job_ids: list):
+    """Send pending net payouts to drivers' Stripe Connect accounts. Failures stay pending."""
+    now_iso = datetime.now(timezone.utc).isoformat()
+    payouts = await db.ledger.find({"job_id": {"$in": job_ids}, "type": "driver_payout", "status": "pending"}, {"_id": 0}).to_list(1000)
+    for p in payouts:
+        rec = await db.users.find_one({"id": p["driver_id"]}, {"_id": 0, "stripe_account_id": 1})
+        acct = rec.get("stripe_account_id") if rec else None
+        if not acct:
+            continue  # pays out automatically once the driver completes Connect onboarding
+        try:
+            transfer = await asyncio.to_thread(
+                stripe.Transfer.create,
+                amount=int(round(p["amount"] * 100)),
+                currency="cad",
+                destination=acct,
+                transfer_group=p["job_id"],
+                description=f"MediTrans net payout — job {p['job_id'][:8]}"
+            )
+            await db.ledger.update_one({"id": p["id"], "status": "pending"},
+                                       {"$set": {"status": "paid", "paid_at": now_iso, "stripe_transfer_id": transfer.id}})
+        except Exception as e:
+            logging.getLogger(__name__).error(f"Driver payout transfer failed for {p['id']}: {e}")
+
 async def _settle_ledger_for_session(session_id: str):
     """Finalize a paid payment_transaction: settle owed ledger entries OR credit a tip to driver earnings."""
     tx = await db.payment_transactions.find_one({"session_id": session_id}, {"_id": 0})
@@ -1328,6 +1383,27 @@ async def _settle_ledger_for_session(session_id: str):
                 {"id": {"$in": ledger_ids}, "status": "owed"},
                 {"$set": {"status": "paid", "paid_at": now_iso, "payment_session_id": session_id}}
             )
+    elif payment_type == "facility_statement":
+        facility_id, month = tx.get("facility_id"), tx.get("month")
+        if await db.facility_payments.find_one({"facility_id": facility_id, "month": month, "status": "paid"}, {"_id": 1}):
+            return  # idempotent
+        await db.facility_payments.insert_one({
+            "id": str(uuid.uuid4()),
+            "facility_id": facility_id,
+            "month": month,
+            "amount": float(tx.get("amount", 0)),
+            "session_id": session_id,
+            "status": "paid",
+            "paid_at": now_iso
+        })
+        # Facility has paid — release driver net payouts for that month via Stripe Connect transfers
+        jobs = await db.jobs.find({"facility_id": facility_id, "status": {"$in": ["delivered", "completed"]}}, {"_id": 0, "id": 1, "delivered_at": 1, "completed_at": 1}).to_list(1000)
+        job_ids = [j["id"] for j in jobs if (j.get("delivered_at") or j.get("completed_at") or "").startswith(month)]
+        if job_ids:
+            await db.jobs.update_many({"id": {"$in": job_ids}}, {"$set": {"facility_paid": True, "facility_paid_at": now_iso}})
+            await db.ledger.update_many({"job_id": {"$in": job_ids}, "type": "commission", "status": "accrued"},
+                                        {"$set": {"status": "paid", "paid_at": now_iso, "payment_session_id": session_id}})
+            await _transfer_pending_payouts(job_ids)
     elif payment_type == "tip":
         # Credit 100% of tip to the driver's earnings (no platform commission on tips)
         existing = await db.earnings.find_one({"payment_session_id": session_id}, {"_id": 0})
@@ -1845,6 +1921,11 @@ async def get_connect_status(current_user: dict = Depends(get_current_user)):
                 "stripe_details_submitted": bool(acct.details_submitted)
             }}
         )
+        # Newly payout-enabled driver: release any pending payouts on facility-paid jobs
+        if acct.payouts_enabled:
+            paid_jobs = await db.jobs.find({"assigned_driver_id": current_user["id"], "facility_paid": True}, {"_id": 0, "id": 1}).to_list(500)
+            if paid_jobs:
+                await _transfer_pending_payouts([j["id"] for j in paid_jobs])
         return {
             "connected": True,
             "charges_enabled": bool(acct.charges_enabled),
@@ -2503,15 +2584,28 @@ async def settle_job_completion(job: dict, driver_id: str, final_status: str = "
         "job_id": job["id"],
         "type": "commission",
         "amount": commission_amount,
-        "status": "owed",
+        "status": "accrued",
         "currency": "CAD",
-        "description": f"{commission_rate * 100:.0f}% platform commission on trip ${gross:.2f}",
+        "description": f"{commission_rate * 100:.0f}% platform fee on trip ${gross:.2f} (collected from facility)",
         "created_at": now.isoformat()
     }
     try:
         await db.ledger.insert_one(ledger_entry)
     except DuplicateKeyError:
         logging.getLogger(__name__).warning(f"Commission already recorded for job {job['id']}")
+    # Marketplace model: driver is OWED their net payout (never owes the platform)
+    net_amount = round(gross - commission_amount, 2)
+    await db.ledger.insert_one({
+        "id": str(uuid.uuid4()),
+        "driver_id": driver_id,
+        "job_id": job["id"],
+        "type": "driver_payout",
+        "amount": net_amount,
+        "status": "pending",
+        "currency": "CAD",
+        "description": f"Net payout for trip ${gross:.2f} (after {commission_rate * 100:.0f}% platform fee)",
+        "created_at": now.isoformat()
+    })
     return {
         "gross_earnings": gross,
         "commission_charged": commission_amount,
@@ -2566,7 +2660,7 @@ async def admin_stats(admin: dict = Depends(require_admin)):
     completed_jobs = await db.jobs.count_documents({"status": {"$in": ["completed", "delivered"]}})
 
     ledger_entries = await db.ledger.find({}, {"_id": 0}).to_list(100000)
-    commission_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") == "owed"), 2)
+    commission_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") in ("owed", "accrued")), 2)
     commission_paid = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "commission" and e.get("status") == "paid"), 2)
     cancel_fee_owed = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "cancellation_fee" and e.get("status") == "owed"), 2)
     cancel_fee_paid = round(sum(e["amount"] for e in ledger_entries if e.get("type") == "cancellation_fee" and e.get("status") == "paid"), 2)
@@ -3174,6 +3268,12 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         "actor_id": current_user["id"],
         "timestamp": datetime.now(timezone.utc).isoformat()
     }
+    # For 'delivered': settle FIRST (atomic status claim) so a concurrent duplicate
+    # can never leave an orphan delivered event in the append-only chain.
+    settlement = None
+    if et == "delivered":
+        driver_id = job.get("assigned_driver_id") or job.get("accepted_by") or current_user["id"]
+        settlement = await settle_job_completion(job, driver_id, "delivered")
     for f in EVENT_PII_FIELDS:
         if doc.get(f):
             doc[f] = enc_pii(doc[f])
@@ -3181,7 +3281,6 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
     await log_audit(current_user, "create", "custody_event", doc["id"])
     doc.pop("_id", None)
 
-    settlement = None
     new_status = status
     fresh = {**job, "id": job_id}
     if et == "pickup_confirmed":
@@ -3194,8 +3293,7 @@ async def create_custody_event(job_id: str, payload: CustodyEventCreate, current
         new_status = "in_transit"
         await db.jobs.update_one({"id": job_id}, {"$set": {"status": "in_transit"}})
     elif et == "delivered":
-        driver_id = job.get("assigned_driver_id") or job.get("accepted_by") or current_user["id"]
-        settlement = await settle_job_completion(job, driver_id, "delivered")
+        # settlement already done above (atomic claim before event insert)
         new_status = "delivered"
         token = job.get("confirm_token") or str(uuid.uuid4())
         await db.jobs.update_one({"id": job_id}, {"$set": {"confirm_token": token}})
@@ -3856,7 +3954,69 @@ async def _facility_statement(user: dict, month: str):
 @api_router.get("/facility/billing")
 async def facility_billing(month: Optional[str] = None, current_user: dict = Depends(get_current_user)):
     month = month or datetime.now(timezone.utc).strftime("%Y-%m")
-    return await _facility_statement(current_user, month)
+    st = await _facility_statement(current_user, month)
+    if current_user.get("role") == "facility":
+        fac = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0, "id": 1})
+        if fac:
+            payment = await db.facility_payments.find_one(
+                {"facility_id": fac["id"], "month": month, "status": "paid"}, {"_id": 0})
+            st["paid"] = bool(payment)
+            st["paid_at"] = payment.get("paid_at") if payment else None
+    return st
+
+class FacilityPayRequest(BaseModel):
+    month: str
+    origin_url: str
+
+@api_router.post("/facility/billing/pay")
+async def pay_facility_statement(req: FacilityPayRequest, request: Request, current_user: dict = Depends(get_current_user)):
+    if current_user.get("role") != "facility":
+        raise HTTPException(status_code=403, detail="Facility access required")
+    st = await _facility_statement(current_user, req.month)
+    fac = await db.facilities.find_one({"owner_user_id": current_user["id"]}, {"_id": 0, "id": 1})
+    if not fac:
+        raise HTTPException(status_code=400, detail="Set up your facility profile first")
+    total = round(float(st.get("total") or 0), 2)
+    if total <= 0:
+        raise HTTPException(status_code=400, detail="Nothing to pay for this month")
+    facility_id = fac["id"]
+    if await db.facility_payments.find_one({"facility_id": facility_id, "month": req.month, "status": "paid"}, {"_id": 1}):
+        raise HTTPException(status_code=400, detail="This statement has already been paid")
+
+    host_url = str(request.base_url).rstrip('/')
+    stripe_checkout = StripeCheckout(api_key=STRIPE_API_KEY, webhook_url=f"{host_url}/api/webhook/stripe")
+    _origin = safe_origin(req.origin_url)
+    session: CheckoutSessionResponse = await stripe_checkout.create_checkout_session(CheckoutSessionRequest(
+        amount=total,
+        currency="cad",
+        success_url=f"{_origin}/facility?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{_origin}/facility",
+        metadata={"payment_type": "facility_statement", "facility_id": facility_id, "month": req.month}
+    ))
+    await db.payment_transactions.insert_one({
+        "id": str(uuid.uuid4()),
+        "user_id": current_user["id"],
+        "session_id": session.session_id,
+        "payment_type": "facility_statement",
+        "facility_id": facility_id,
+        "month": req.month,
+        "amount": total,
+        "currency": "cad",
+        "status": "pending",
+        "payment_status": "initiated",
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "updated_at": datetime.now(timezone.utc).isoformat()
+    })
+    return {"checkout_url": session.url, "session_id": session.session_id, "amount": total}
+
+@api_router.get("/driver/payouts")
+async def driver_payouts(current_user: dict = Depends(get_current_user)):
+    rows = await db.ledger.find({"driver_id": current_user["id"], "type": "driver_payout"}, {"_id": 0}).sort("created_at", -1).to_list(500)
+    pending = round(sum(r["amount"] for r in rows if r.get("status") == "pending"), 2)
+    paid = round(sum(r["amount"] for r in rows if r.get("status") == "paid"), 2)
+    return {"payouts": rows, "pending_total": pending, "paid_total": paid,
+            "connect_ready": bool(current_user.get("stripe_account_id"))}
+
 
 @api_router.get("/facility/billing/export")
 async def facility_billing_export(request: Request, month: Optional[str] = None, format: str = "csv", auth: Optional[str] = Query(None)):

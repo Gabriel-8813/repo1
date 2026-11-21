@@ -9,6 +9,15 @@ export async function getDownloadToken() {
 }
 
 export async function openSecureUrl(url) {
-  const t = await getDownloadToken();
-  window.open(`${url}${url.includes('?') ? '&' : '?'}auth=${t}`, '_blank');
+  // Open synchronously so popup blockers see the user gesture, then point it at the signed URL
+  const win = window.open('', '_blank');
+  try {
+    const t = await getDownloadToken();
+    const signed = `${url}${url.includes('?') ? '&' : '?'}auth=${t}`;
+    if (win) win.location = signed;
+    else window.open(signed, '_blank');
+  } catch (e) {
+    if (win) win.close();
+    throw e;
+  }
 }

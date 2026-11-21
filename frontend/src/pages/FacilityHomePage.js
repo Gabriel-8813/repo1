@@ -119,6 +119,41 @@ export default function FacilityHomePage() {
     openSecureUrl(`${API}/facility/billing/export?month=${billMonth}&format=${fmt}`);
   };
 
+  const [payingStatement, setPayingStatement] = useState(false);
+  const payStatement = async () => {
+    setPayingStatement(true);
+    try {
+      const r = await axios.post(`${API}/facility/billing/pay`, { month: billMonth, origin_url: window.location.origin }, { headers });
+      window.location.href = r.data.checkout_url;
+    } catch (e) {
+      toast.error(e.response?.data?.detail || 'Could not start payment');
+      setPayingStatement(false);
+    }
+  };
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const sessionId = params.get('session_id');
+    if (!sessionId || !token) return;
+    let attempts = 0;
+    const poll = async () => {
+      try {
+        const r = await axios.get(`${API}/payments/status/${sessionId}`, { headers });
+        if (r.data.payment_status === 'paid') {
+          toast.success('Statement paid — thank you! Driver payouts are being released.');
+          window.history.replaceState({}, '', '/facility');
+          setBillMonth((m) => m);
+          axios.get(`${API}/facility/billing?month=${billMonth}`, { headers }).then((res) => setStatement(res.data)).catch(() => {});
+          return;
+        }
+      } catch { /* keep polling */ }
+      if (++attempts < 8) setTimeout(poll, 2000);
+      else window.history.replaceState({}, '', '/facility');
+    };
+    poll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
   const load = useCallback(async () => {
     try {
       const [fr, dr] = await Promise.all([
@@ -485,6 +520,16 @@ export default function FacilityHomePage() {
                   <h2 className="font-archivo font-bold text-2xl text-slate-900">Monthly Statement</h2>
                   <div className="flex items-center gap-2">
                     <Input type="month" value={billMonth} onChange={(e) => setBillMonth(e.target.value)} className="h-9 w-40" data-testid="billing-month-input" />
+                    {statement?.paid ? (
+                      <span className="inline-flex items-center gap-1 px-3 py-1.5 rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold" data-testid="statement-paid-badge">
+                        <ShieldCheck className="w-3.5 h-3.5" /> Paid
+                      </span>
+                    ) : statement?.total > 0 && (
+                      <Button size="sm" className="rounded-full bg-emerald-600 hover:bg-emerald-700" disabled={payingStatement}
+                        onClick={payStatement} data-testid="pay-statement-btn">
+                        {payingStatement ? 'Redirecting…' : `Pay $${statement.total.toFixed(2)}`}
+                      </Button>
+                    )}
                     <Button size="sm" variant="outline" className="rounded-full" onClick={() => exportStatement('csv')} data-testid="export-csv-btn">
                       <Download className="w-4 h-4 mr-1" /> CSV
                     </Button>

@@ -26,7 +26,7 @@ export default function TermsPage() {
           <p>Drivers must hold and keep current all required credentials (valid Ontario driver's licence, vehicle insurance, CVOR where applicable, TDG training for dangerous goods, and a vulnerable-sector check). Drivers whose credentials lapse — including expired insurance — are automatically ineligible for new deliveries until compliant. Chain-of-custody steps (pickup confirmation, transit updates, delivery signature) are mandatory for every job.</p>
         </Section>
         <Section icon={CreditCard} title="Fees & payments">
-          <p>Facilities are charged per delivery based on distance (or agreed flat/contract terms) plus applicable HST. The platform retains a commission (default 20%) from the driver's gross payout on completed trips. A late-cancellation fee applies when a driver cancels beyond the free-cancellation window after accepting a job. Monthly statements and invoices are available in the Billing section.</p>
+          <p>Facilities are charged per delivery based on distance (or agreed flat/contract terms) plus applicable HST, payable by card through Stripe from the Billing section. From each completed delivery, MediTrans retains a platform fee (default 20%) and pays the driver the remaining net amount automatically by Stripe Connect transfer once the facility's statement is settled — drivers never owe the platform a balance on completed trips. A late-cancellation fee applies when a driver cancels beyond the free-cancellation window after accepting a job. Monthly statements and invoices are available in the Billing section.</p>
         </Section>
         <Section icon={Ban} title="Prohibited use">
           <p>The platform must not be used to transport people, controlled substances outside a lawful supply chain, or any item misdescribed to avoid handling requirements. Accounts may be suspended for credential fraud, custody-record falsification, or abuse of recipients, facilities or drivers.</p>
@@ -37,7 +37,7 @@ export default function TermsPage() {
         <Section icon={Scale} title="Governing law">
           <p>These terms are governed by the laws of the Province of Ontario and the federal laws of Canada. Disputes are subject to the exclusive jurisdiction of the courts of Ontario. Our <a href="/privacy" className="text-blue-600 underline">Privacy Policy</a> forms part of these terms.</p>
         </Section>
-        <p className="text-xs text-slate-400 mt-6">Questions: support@meditrans.ca</p>
+        <p className="text-xs text-slate-400 mt-6">MediTrans Canada · Questions: support@meditranscanada.com</p>
       </div>
     </div>
   );

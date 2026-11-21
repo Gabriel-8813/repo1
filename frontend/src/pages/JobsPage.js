@@ -168,7 +168,7 @@ const JobsPage = () => {
   };
 
   const copyTipLink = async (job) => {
-    const url = `${window.location.origin}/tip/${job.id}${job.confirm_token ? `?t=${job.confirm_token}` : ''}`;
+    const url = `${window.location.origin}/tip/${job.id}`;
     try {
       await navigator.clipboard.writeText(url);
       toast.success('Tip link copied — share it with your customer!');
